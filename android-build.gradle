@@ -3,5 +3,22 @@ repositories {
 }
 
 dependencies {
-    api 'com.tencent.mm.opensdk:wechat-sdk-android:+'
+    // 分享、授权、小程序、业务视图仍走 OpenSDK；只有支付换成 PaySDK。
+    // 钉住版本：PaySDK 与 OpenSDK 之间有 wire 常量上的对齐要求，浮动版本会让对齐失效而不报错。
+    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.34'
+
+    def paySdkDirectory = project.file('src/main/paysdk-libs')
+    def paySdkCore = new File(paySdkDirectory, 'wechat-paysdk-android-0.1.0.aar')
+    def paySdkAdapter = new File(
+            paySdkDirectory,
+            'wechat-paysdk-adapter-opensdk-android-0.1.0.aar'
+    )
+    // 缺失时直接失败：AAR 由 paysdk 仓库的 syncPluginAars 写入，静默少一个会编出一个
+    // 支付永远拉不起来的包。
+    [paySdkCore, paySdkAdapter].each { artifact ->
+        if (!artifact.isFile()) {
+            throw new GradleException("Missing PaySDK artifact: ${artifact}")
+        }
+    }
+    implementation files(paySdkCore, paySdkAdapter)
 }

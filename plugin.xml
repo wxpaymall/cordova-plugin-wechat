@@ -17,6 +17,8 @@
     <!-- <preference name="WECHATAPPID" value="YOUR_WECHAT_APP_ID_HERE" /> -->
     <preference name="WECHATAPPID" />
     <preference name="UNIVERSALLINK" />
+    <!-- 只有内部测试包会关掉：商城的 release 包不做商户签名校验，装到测试机上才能起来。 -->
+    <preference name="WECHAT_SIGNATURE_CHECK" default="true" />
 
     <!-- js module-->
     <js-module src="www/wechat.js" name="Wechat">
@@ -100,6 +102,7 @@
                 <param name="android-package" value="xu.li.cordova.wechat.Wechat"/>
             </feature>
             <preference name="WECHATAPPID" value="$WECHATAPPID"/>
+            <preference name="WECHAT_SIGNATURE_CHECK" value="$WECHAT_SIGNATURE_CHECK"/>
         </config-file>
 
         <config-file target="AndroidManifest.xml" parent="/*">
@@ -141,6 +144,16 @@
 
         <source-file src="src/android/Wechat.java" target-dir="src/xu/li/cordova/wechat" />
         <source-file src="src/android/Util.java" target-dir="src/xu/li/cordova/wechat" />
+
+        <!-- PaySDK 承接支付。AAR 由 paysdk 仓库的 syncPluginAars 写进 src/android/libs/，
+             这里搬到 paysdk-libs/ 供 android-build.gradle 引用。 -->
+        <resource-file
+            src="src/android/libs/wechat-paysdk-android-0.1.0.aar"
+            target="paysdk-libs/wechat-paysdk-android-0.1.0.aar" />
+        <resource-file
+            src="src/android/libs/wechat-paysdk-adapter-opensdk-android-0.1.0.aar"
+            target="paysdk-libs/wechat-paysdk-adapter-opensdk-android-0.1.0.aar" />
+
         <framework src="android-build.gradle" custom="true" type="gradleReference" />
     </platform>
 </plugin>

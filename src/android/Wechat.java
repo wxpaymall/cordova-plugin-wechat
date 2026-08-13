@@ -31,6 +31,9 @@ import com.tencent.mm.opensdk.modelpay.PayReq;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.WXAPIFactory;
 import com.tencent.mm.opensdk.utils.ILog;
+import com.tencent.mm.paysdk.PayConfig;
+import com.tencent.mm.paysdk.WechatPay;
+import com.tencent.mm.paysdk.adapter.opensdk.WechatPayCompat;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaActivity;
@@ -56,6 +59,7 @@ public class Wechat extends CordovaPlugin {
 
     public static final String PREFS_NAME = "Cordova.Plugin.Wechat";
     public static final String WXAPPID_PROPERTY_KEY = "wechatappid";
+    public static final String WECHAT_SIGNATURE_CHECK_PROPERTY_KEY = "WECHAT_SIGNATURE_CHECK";
 
     public static final String ERROR_WECHAT_NOT_INSTALLED = "未安装微信";
     public static final String ERROR_INVALID_PARAMETERS = "参数格式错误";
@@ -131,8 +135,20 @@ public class Wechat extends CordovaPlugin {
         // save app id
         saveAppId(cordova.getActivity(), id);
 
+        // 必须先于 initWXAPI：getWxAPI 是静态的，只能从 wx_preferences 取验签开关，而它一旦
+        // 用默认值（打开）建出 IWXAPI 就会被静态缓存住——对着非官方签名的微信会 registerApp
+        // 失败，连 isWXAppInstalled 都返回 false。
+        wx_preferences = preferences;
+
         // init api
         initWXAPI();
+
+        // 支付走 PaySDK：init 一次，之后每笔调 WechatPayCompat.sendReq。回包落点仍是
+        // .wxapi.WXPayEntryActivity，与接 OpenSDK 时一样，见 EntryActivity。
+        WechatPay.init(
+                cordova.getActivity().getApplicationContext(),
+                new PayConfig(id, checkWechatSignature(preferences))
+        );
 
         // 保存引用
         instance = this;
@@ -142,6 +158,15 @@ public class Wechat extends CordovaPlugin {
         }
 
         Log.d(TAG, "plugin initialized.");
+    }
+
+    /**
+     * 商城的 release 包不签商户证书，装到测试机上必须能把校验关掉；商户接入时保持默认打开。
+     * OpenSDK 与 PaySDK 两侧都吃这个开关，不然一侧起得来另一侧起不来。
+     */
+    private static boolean checkWechatSignature(CordovaPreferences prefs) {
+        return prefs == null
+                || prefs.getBoolean(WECHAT_SIGNATURE_CHECK_PROPERTY_KEY, true);
     }
 
     protected void initWXAPI() {
@@ -172,7 +197,11 @@ public class Wechat extends CordovaPlugin {
             String appId = getSavedAppId(ctx);
 
             if (!appId.isEmpty()) {
-                wxAPI = WXAPIFactory.createWXAPI(ctx, appId, true);
+                wxAPI = WXAPIFactory.createWXAPI(
+                        ctx,
+                        appId,
+                        checkWechatSignature(wx_preferences)
+                );
 
                 // 获取微信客户端版本
                 int clientVersion = wxAPI.getWXAppSupportAPI();
@@ -412,9 +441,9 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
-        final IWXAPI api = getWxAPI(cordova.getActivity());
-
-        if (api.sendReq(req)) {
+        // 支付由 PaySDK 承接，其余能力仍走 OpenSDK。同步返回只说明请求发没发出去，结果稍后
+        // 由微信回跳 .wxapi.WXPayEntryActivity 送达，见 EntryActivity。
+        if (WechatPayCompat.sendReq(req)) {
             Log.i(TAG, "Payment request has been sent successfully.");
 
             // send no result

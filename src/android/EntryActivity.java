@@ -20,6 +20,7 @@ import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.IWXAPIEventHandler;
 import com.tencent.mm.opensdk.modelbiz.ChooseCardFromWXCardPackage;
 import com.tencent.mm.opensdk.modelmsg.ShowMessageFromWX;
+import com.tencent.mm.paysdk.adapter.opensdk.WechatPayCompat;
 import __PACKAGE_NAME__.MainActivity;
 
 import org.apache.cordova.CallbackContext;
@@ -39,13 +40,7 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        IWXAPI api = Wechat.getWxAPI(this);
-
-        if (api == null) {
-            startMainActivity();
-        } else {
-            api.handleIntent(getIntent(), this);
-        }
+        route(getIntent());
     }
 
     @Override
@@ -54,13 +49,34 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
 
         setIntent(intent);
 
+        route(intent);
+    }
+
+    /**
+     * 回包先给 PaySDK 认一次，不是它的再交给 OpenSDK。
+     *
+     * <p>支付走 PaySDK 之后，微信按类名把结果回跳到本类（商户侧的
+     * {@code .wxapi.WXPayEntryActivity}），与接 OpenSDK 时同一个落点；分享、授权、小程序、
+     * 业务视图的回包只有 OpenSDK 认得，所以两条链都得留着。
+     *
+     * <p>不能两条都走：微信只回跳一次，都处理会让同一笔结果兑现两遍。先问 PaySDK 是安全的，
+     * 它认不出来时返回 false 且不回调。
+     *
+     * <p>回调仍交给本类的 {@link #onResp}，支付结果因此与其它命令共用同一套投递：拿不到挂起的
+     * JS 回调就拉起主界面（冷启动回包），成功转 JSON，失败按错误码给文案，最后 finish。
+     */
+    private void route(Intent intent) {
+        if (WechatPayCompat.handleIntent(this, intent, this)) {
+            return;
+        }
+
         IWXAPI api = Wechat.getWxAPI(this);
+
         if (api == null) {
             startMainActivity();
         } else {
             api.handleIntent(intent, this);
         }
-
     }
 
     @Override
