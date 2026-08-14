@@ -20,7 +20,9 @@ import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.IWXAPIEventHandler;
 import com.tencent.mm.opensdk.modelbiz.ChooseCardFromWXCardPackage;
 import com.tencent.mm.opensdk.modelmsg.ShowMessageFromWX;
-import com.tencent.mm.paysdk.adapter.opensdk.WechatPayCompat;
+import com.tencent.mm.paysdk.PayCallbackHandler;
+import com.tencent.mm.paysdk.WechatPay;
+import com.tencent.mm.paysdk.model.WechatPayResult;
 import __PACKAGE_NAME__.MainActivity;
 
 import org.apache.cordova.CallbackContext;
@@ -62,11 +64,19 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
      * <p>不能两条都走：微信只回跳一次，都处理会让同一笔结果兑现两遍。先问 PaySDK 是安全的，
      * 它认不出来时返回 false 且不回调。
      *
-     * <p>回调仍交给本类的 {@link #onResp}，支付结果因此与其它命令共用同一套投递：拿不到挂起的
-     * JS 回调就拉起主界面（冷启动回包），成功转 JSON，失败按错误码给文案，最后 finish。
+     * <p>支付回调交给 {@link #deliverPayResult}，其余命令仍走 {@link #onResp}。两者的投递方式
+     * 保持一致：拿不到挂起的 JS 回调就拉起主界面（冷启动回包），成功转 JSON，失败按错误码给
+     * 文案，最后 finish。
      */
     private void route(Intent intent) {
-        if (WechatPayCompat.handleIntent(this, intent, this)) {
+        PayCallbackHandler payHandler = new PayCallbackHandler() {
+            @Override
+            public void onAppPayResult(WechatPayResult result) {
+                deliverPayResult(result);
+            }
+        };
+
+        if (WechatPay.handleCallbackIntent(this, intent, payHandler)) {
             return;
         }
 
@@ -76,6 +86,61 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
             startMainActivity();
         } else {
             api.handleIntent(intent, this);
+        }
+    }
+
+    /**
+     * App 支付回包的投递，与 {@link #onResp} 对其它命令的处理逐段对位。
+     *
+     * <p>回包落点只有一个，且不绑定发起它的那次 submit。商城只在前台单笔下单，因此沿用挂起的
+     * JS 回调；真实商户并发多笔时应当在发起时把 {@code prepayId} 与自己的订单号落盘，在这里按
+     * {@link WechatPayResult#getPrepayId()} 回查。
+     */
+    private void deliverPayResult(WechatPayResult result) {
+        Log.d(Wechat.TAG, "onAppPayResult - errCode:" + result.getErrCode()
+                + ", errStr:" + result.getErrMessage());
+
+        CallbackContext ctx = Wechat.getCurrentCallbackContext();
+
+        if (ctx == null) {
+            startMainActivity();
+            return;
+        }
+
+        if (result.isSuccess()) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put("errCode", result.getErrCode());
+                json.put("errStr", result.getErrMessage());
+                json.put("prepayId", result.getPrepayId());
+                json.put("extData", result.getExtData());
+                json.put("transaction", result.getTransaction());
+                json.put("openId", result.getOpenId());
+                json.put("returnKey", result.getReturnKey());
+            } catch (JSONException e) {
+                Log.d(Wechat.TAG, "put json error: " + e.getMessage());
+            }
+            Log.d(Wechat.TAG, "resp: " + json.toString());
+            ctx.success(json);
+        } else {
+            ctx.error(describePayFailure(result));
+        }
+
+        finish();
+    }
+
+    /** 文案与 {@link #onResp} 里同码值的分支逐字一致，JS 侧只把它写进日志。 */
+    private static String describePayFailure(WechatPayResult result) {
+        switch (result.getErrCode()) {
+            case WechatPayResult.ERR_USER_CANCEL:
+                return String.format("用户点击取消并返回, errCode: %d, errStr: %s",
+                        result.getErrCode(), result.getErrMessage());
+            case WechatPayResult.ERR_COMM:
+                return String.format("普通错误, errCode: %d, errStr: %s",
+                        result.getErrCode(), result.getErrMessage());
+            default:
+                return String.format("errCode: %d, errStr: %s",
+                        result.getErrCode(), result.getErrMessage());
         }
     }
 

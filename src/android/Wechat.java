@@ -27,13 +27,13 @@ import com.tencent.mm.opensdk.modelmsg.WXMusicObject;
 import com.tencent.mm.opensdk.modelmsg.WXTextObject;
 import com.tencent.mm.opensdk.modelmsg.WXVideoObject;
 import com.tencent.mm.opensdk.modelmsg.WXWebpageObject;
-import com.tencent.mm.opensdk.modelpay.PayReq;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.WXAPIFactory;
 import com.tencent.mm.opensdk.utils.ILog;
 import com.tencent.mm.paysdk.PayConfig;
 import com.tencent.mm.paysdk.WechatPay;
-import com.tencent.mm.paysdk.adapter.opensdk.WechatPayCompat;
+import com.tencent.mm.paysdk.model.LaunchResult;
+import com.tencent.mm.paysdk.model.WechatPayRequest;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaActivity;
@@ -62,6 +62,7 @@ public class Wechat extends CordovaPlugin {
     public static final String WECHAT_SIGNATURE_CHECK_PROPERTY_KEY = "WECHAT_SIGNATURE_CHECK";
 
     public static final String ERROR_WECHAT_NOT_INSTALLED = "未安装微信";
+    public static final String ERROR_WECHAT_SIGNATURE_INVALID = "微信安装包签名不可信";
     public static final String ERROR_INVALID_PARAMETERS = "参数格式错误";
     public static final String ERROR_SEND_REQUEST_FAILED = "发送请求失败";
     public static final String ERROR_WECHAT_RESPONSE_COMMON = "普通错误";
@@ -143,7 +144,7 @@ public class Wechat extends CordovaPlugin {
         // init api
         initWXAPI();
 
-        // 支付走 PaySDK：init 一次，之后每笔调 WechatPayCompat.sendReq。回包落点仍是
+        // 支付走 PaySDK：init 一次，之后每笔调 WechatPay.submit。回包落点仍是
         // .wxapi.WXPayEntryActivity，与接 OpenSDK 时一样，见 EntryActivity。
         WechatPay.init(
                 cordova.getActivity().getApplicationContext(),
@@ -419,7 +420,7 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
-        PayReq req = new PayReq();
+        final WechatPayRequest req;
 
         try {
             // final String appid = params.getString("appid");
@@ -427,13 +428,15 @@ public class Wechat extends CordovaPlugin {
             // if (!savedAppid.equals(appid)) {
             //     this.saveAppId(cordova.getActivity(), appid);
             // }
-            req.appId = getAppId(preferences);
-            req.partnerId = params.has("mch_id") ? params.getString("mch_id") : params.getString("partnerid");
-            req.prepayId = params.has("prepay_id") ? params.getString("prepay_id") : params.getString("prepayid");
-            req.nonceStr = params.has("nonce") ? params.getString("nonce") : params.getString("noncestr");
-            req.timeStamp = params.getString("timestamp");
-            req.sign = params.getString("sign");
-            req.packageValue = params.has("package") ? params.getString("package") : "Sign=WXPay";
+            req = WechatPayRequest.builder()
+                    .appId(getAppId(preferences))
+                    .partnerId(params.has("mch_id") ? params.getString("mch_id") : params.getString("partnerid"))
+                    .prepayId(params.has("prepay_id") ? params.getString("prepay_id") : params.getString("prepayid"))
+                    .nonceStr(params.has("nonce") ? params.getString("nonce") : params.getString("noncestr"))
+                    .timeStamp(params.getString("timestamp"))
+                    .sign(params.getString("sign"))
+                    .packageValue(params.has("package") ? params.getString("package") : "Sign=WXPay")
+                    .build();
         } catch (Exception e) {
             Log.e(TAG, e.getMessage());
 
@@ -443,19 +446,39 @@ public class Wechat extends CordovaPlugin {
 
         // 支付由 PaySDK 承接，其余能力仍走 OpenSDK。同步返回只说明请求发没发出去，结果稍后
         // 由微信回跳 .wxapi.WXPayEntryActivity 送达，见 EntryActivity。
-        if (WechatPayCompat.sendReq(req)) {
+        LaunchResult launch = WechatPay.submit(req);
+
+        if (launch.isSuccess()) {
             Log.i(TAG, "Payment request has been sent successfully.");
 
             // send no result
             sendNoResultPluginResult(callbackContext);
         } else {
-            Log.i(TAG, "Payment request has been sent unsuccessfully.");
+            Log.i(TAG, "Payment request has been sent unsuccessfully: " + launch);
 
             // send error
-            callbackContext.error(ERROR_SEND_REQUEST_FAILED);
+            callbackContext.error(describeLaunchFailure(launch));
         }
 
         return true;
+    }
+
+    /**
+     * 把拉起失败翻成给 JS 的错误文案。
+     *
+     * <p>{@code getMessage()} 只进日志：它是排障用的可读描述，措辞不构成兼容承诺。
+     */
+    private static String describeLaunchFailure(LaunchResult launch) {
+        switch (launch.getCode()) {
+            case LaunchResult.CODE_WECHAT_NOT_INSTALLED:
+                return ERROR_WECHAT_NOT_INSTALLED;
+            case LaunchResult.CODE_WECHAT_SIGNATURE_INVALID:
+                return ERROR_WECHAT_SIGNATURE_INVALID;
+            case LaunchResult.CODE_INVALID_PARAM:
+                return ERROR_INVALID_PARAMETERS;
+            default:
+                return ERROR_SEND_REQUEST_FAILED;
+        }
     }
 
     protected boolean entrustAppSignContract(CordovaArgs args, CallbackContext callbackContext){

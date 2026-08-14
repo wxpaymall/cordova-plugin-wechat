@@ -150,9 +150,6 @@
         <resource-file
             src="src/android/libs/wechat-paysdk-android-0.1.0.aar"
             target="paysdk-libs/wechat-paysdk-android-0.1.0.aar" />
-        <resource-file
-            src="src/android/libs/wechat-paysdk-adapter-opensdk-android-0.1.0.aar"
-            target="paysdk-libs/wechat-paysdk-adapter-opensdk-android-0.1.0.aar" />
 
         <framework src="android-build.gradle" custom="true" type="gradleReference" />
     </platform>
