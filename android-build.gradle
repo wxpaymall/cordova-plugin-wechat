@@ -8,7 +8,7 @@ dependencies {
     implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.34'
 
     def paySdkDirectory = project.file('src/main/paysdk-libs')
-    def paySdkCore = new File(paySdkDirectory, 'wechat-paysdk-android-0.1.0.aar')
+    def paySdkCore = new File(paySdkDirectory, 'wechat-paysdk-android-1.0.0.aar')
     // 缺失时直接失败：AAR 由 paysdk 仓库的 syncPluginAars 写入，静默少一个会编出一个
     // 支付永远拉不起来的包。
     if (!paySdkCore.isFile()) {

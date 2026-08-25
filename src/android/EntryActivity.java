@@ -9,21 +9,21 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
 
+import __PACKAGE_NAME__.MainActivity;
 import com.tencent.mm.opensdk.constants.ConstantsAPI;
 import com.tencent.mm.opensdk.modelbase.BaseReq;
 import com.tencent.mm.opensdk.modelbase.BaseResp;
+import com.tencent.mm.opensdk.modelbiz.ChooseCardFromWXCardPackage;
 import com.tencent.mm.opensdk.modelbiz.WXLaunchMiniProgram;
 import com.tencent.mm.opensdk.modelbiz.WXOpenBusinessView;
 import com.tencent.mm.opensdk.modelmsg.SendAuth;
+import com.tencent.mm.opensdk.modelmsg.ShowMessageFromWX;
 import com.tencent.mm.opensdk.modelmsg.WXMediaMessage;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.IWXAPIEventHandler;
-import com.tencent.mm.opensdk.modelbiz.ChooseCardFromWXCardPackage;
-import com.tencent.mm.opensdk.modelmsg.ShowMessageFromWX;
-import com.tencent.mm.paysdk.PayCallbackHandler;
 import com.tencent.mm.paysdk.WechatPay;
-import com.tencent.mm.paysdk.model.WechatPayResult;
-import __PACKAGE_NAME__.MainActivity;
+import com.tencent.mm.paysdk.WechatPayResultHandler;
+import com.tencent.mm.paysdk.model.AppPayResult;
 
 import org.apache.cordova.CallbackContext;
 import org.json.JSONArray;
@@ -69,9 +69,9 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
      * 文案，最后 finish。
      */
     private void route(Intent intent) {
-        PayCallbackHandler payHandler = new PayCallbackHandler() {
+        WechatPayResultHandler payHandler = new WechatPayResultHandler() {
             @Override
-            public void onAppPayResult(WechatPayResult result) {
+            public void onAppPayResult(AppPayResult result) {
                 deliverPayResult(result);
             }
         };
@@ -94,9 +94,9 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
      *
      * <p>回包落点只有一个，且不绑定发起它的那次 submit。商城只在前台单笔下单，因此沿用挂起的
      * JS 回调；真实商户并发多笔时应当在发起时把 {@code prepayId} 与自己的订单号落盘，在这里按
-     * {@link WechatPayResult#getPrepayId()} 回查。
+     * {@link AppPayResult#getPrepayId()} 回查。
      */
-    private void deliverPayResult(WechatPayResult result) {
+    private void deliverPayResult(AppPayResult result) {
         Log.d(Wechat.TAG, "onAppPayResult - errCode:" + result.getErrCode()
                 + ", errStr:" + result.getErrMessage());
 
@@ -130,12 +130,12 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
     }
 
     /** 文案与 {@link #onResp} 里同码值的分支逐字一致，JS 侧只把它写进日志。 */
-    private static String describePayFailure(WechatPayResult result) {
+    private static String describePayFailure(AppPayResult result) {
         switch (result.getErrCode()) {
-            case WechatPayResult.ERR_USER_CANCEL:
+            case AppPayResult.ERR_USER_CANCEL:
                 return String.format("用户点击取消并返回, errCode: %d, errStr: %s",
                         result.getErrCode(), result.getErrMessage());
-            case WechatPayResult.ERR_COMM:
+            case AppPayResult.ERR_COMM:
                 return String.format("普通错误, errCode: %d, errStr: %s",
                         result.getErrCode(), result.getErrMessage());
             default:

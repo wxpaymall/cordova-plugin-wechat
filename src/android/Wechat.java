@@ -13,8 +13,8 @@ import android.webkit.URLUtil;
 
 import com.tencent.mm.opensdk.modelbiz.ChooseCardFromWXCardPackage;
 import com.tencent.mm.opensdk.modelbiz.WXLaunchMiniProgram;
-import com.tencent.mm.opensdk.modelbiz.WXOpenBusinessWebview;
 import com.tencent.mm.opensdk.modelbiz.WXOpenBusinessView;
+import com.tencent.mm.opensdk.modelbiz.WXOpenBusinessWebview;
 import com.tencent.mm.opensdk.modelmsg.SendAuth;
 import com.tencent.mm.opensdk.modelmsg.SendMessageToWX;
 import com.tencent.mm.opensdk.modelmsg.WXAppExtendObject;
@@ -32,8 +32,8 @@ import com.tencent.mm.opensdk.openapi.WXAPIFactory;
 import com.tencent.mm.opensdk.utils.ILog;
 import com.tencent.mm.paysdk.PayConfig;
 import com.tencent.mm.paysdk.WechatPay;
-import com.tencent.mm.paysdk.model.LaunchResult;
-import com.tencent.mm.paysdk.model.WechatPayRequest;
+import com.tencent.mm.paysdk.model.AppPayRequest;
+import com.tencent.mm.paysdk.model.SendResult;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaActivity;
@@ -144,7 +144,7 @@ public class Wechat extends CordovaPlugin {
         // init api
         initWXAPI();
 
-        // 支付走 PaySDK：init 一次，之后每笔调 WechatPay.submit。回包落点仍是
+        // 支付走 PaySDK：init 一次，之后每笔调 WechatPay.send。回包落点仍是
         // .wxapi.WXPayEntryActivity，与接 OpenSDK 时一样，见 EntryActivity。
         WechatPay.init(
                 cordova.getActivity().getApplicationContext(),
@@ -420,7 +420,7 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
-        final WechatPayRequest req;
+        final AppPayRequest req;
 
         try {
             // final String appid = params.getString("appid");
@@ -428,7 +428,7 @@ public class Wechat extends CordovaPlugin {
             // if (!savedAppid.equals(appid)) {
             //     this.saveAppId(cordova.getActivity(), appid);
             // }
-            req = WechatPayRequest.builder()
+            req = AppPayRequest.builder()
                     .appId(getAppId(preferences))
                     .partnerId(params.has("mch_id") ? params.getString("mch_id") : params.getString("partnerid"))
                     .prepayId(params.has("prepay_id") ? params.getString("prepay_id") : params.getString("prepayid"))
@@ -446,18 +446,18 @@ public class Wechat extends CordovaPlugin {
 
         // 支付由 PaySDK 承接，其余能力仍走 OpenSDK。同步返回只说明请求发没发出去，结果稍后
         // 由微信回跳 .wxapi.WXPayEntryActivity 送达，见 EntryActivity。
-        LaunchResult launch = WechatPay.submit(req);
+        SendResult sendResult = WechatPay.send(req);
 
-        if (launch.isSuccess()) {
+        if (sendResult.isSent()) {
             Log.i(TAG, "Payment request has been sent successfully.");
 
             // send no result
             sendNoResultPluginResult(callbackContext);
         } else {
-            Log.i(TAG, "Payment request has been sent unsuccessfully: " + launch);
+            Log.i(TAG, "Payment request has been sent unsuccessfully: " + sendResult);
 
             // send error
-            callbackContext.error(describeLaunchFailure(launch));
+            callbackContext.error(describeSendFailure(sendResult));
         }
 
         return true;
@@ -468,13 +468,13 @@ public class Wechat extends CordovaPlugin {
      *
      * <p>{@code getMessage()} 只进日志：它是排障用的可读描述，措辞不构成兼容承诺。
      */
-    private static String describeLaunchFailure(LaunchResult launch) {
-        switch (launch.getCode()) {
-            case LaunchResult.CODE_WECHAT_NOT_INSTALLED:
+    private static String describeSendFailure(SendResult sendResult) {
+        switch (sendResult.getCode()) {
+            case SendResult.CODE_WECHAT_NOT_INSTALLED:
                 return ERROR_WECHAT_NOT_INSTALLED;
-            case LaunchResult.CODE_WECHAT_SIGNATURE_INVALID:
+            case SendResult.CODE_WECHAT_SIGNATURE_INVALID:
                 return ERROR_WECHAT_SIGNATURE_INVALID;
-            case LaunchResult.CODE_INVALID_PARAM:
+            case SendResult.CODE_INVALID_PARAM:
                 return ERROR_INVALID_PARAMETERS;
             default:
                 return ERROR_SEND_REQUEST_FAILED;
