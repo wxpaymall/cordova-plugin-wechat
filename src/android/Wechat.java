@@ -27,6 +27,7 @@ import com.tencent.mm.opensdk.modelmsg.WXMusicObject;
 import com.tencent.mm.opensdk.modelmsg.WXTextObject;
 import com.tencent.mm.opensdk.modelmsg.WXVideoObject;
 import com.tencent.mm.opensdk.modelmsg.WXWebpageObject;
+import com.tencent.mm.opensdk.modelpay.PayReq;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.WXAPIFactory;
 import com.tencent.mm.opensdk.utils.ILog;
@@ -102,6 +103,18 @@ public class Wechat extends CordovaPlugin {
     public static final String KEY_ARG_MESSAGE_MEDIA_HDIMAGEDATA = "hdImageData";
     public static final String KEY_ARG_MESSAGE_MEDIA_BUSINESSTYPE = "businessType";
     public static final String KEY_ARG_MESSAGE_MEDIA_QUERY = "query";
+
+    /**
+     * UAT 要在同一批用例里覆盖两条支付链路，由平台下发的下单参数逐笔指定本次用哪个 SDK 发起。
+     *
+     * <p>只有显式传 {@code opensdk} 才切到 OpenSDK 老通道，缺失与未知值一律走 PaySDK——商城仍是
+     * 商户接入的对照组，不带这个参数时代码路径与没有这个开关时逐字一致。UAT 侧「不配开关默认跑
+     * 老通道」是测试策略，在脚本层兜底，不下沉到这里。
+     *
+     * <p>商城 UI 上没有、也不应该有任何选择入口：这个键只可能来自 UAT 构造的下单 URL。
+     */
+    public static final String KEY_UAT_APPPAY_SDK = "uat_wxpaymall_apppay_sdk";
+    public static final String APPPAY_SDK_OPENSDK = "opensdk";
 
     public static final int TYPE_WECHAT_SHARING_APP = 1;
     public static final int TYPE_WECHAT_SHARING_EMOTION = 2;
@@ -420,6 +433,10 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
+        if (APPPAY_SDK_OPENSDK.equals(params.optString(KEY_UAT_APPPAY_SDK))) {
+            return sendPaymentRequestByOpenSdk(params, callbackContext);
+        }
+
         final AppPayRequest req;
 
         try {
@@ -458,6 +475,50 @@ public class Wechat extends CordovaPlugin {
 
             // send error
             callbackContext.error(describeSendFailure(sendResult));
+        }
+
+        return true;
+    }
+
+    /**
+     * 用 OpenSDK 发起 App 支付，供 UAT 逐笔覆盖老通道，见 {@link #KEY_UAT_APPPAY_SDK}。
+     *
+     * <p>参数取法与 PaySDK 分支逐字对齐（两套下单 JSON 的字段名都兼容），appId 同样取
+     * {@code getAppId(preferences)}——同 appid、同包名、同签名，不涉及开放平台另行登记。
+     *
+     * <p>回包仍落在 {@code .wxapi.WXPayEntryActivity}：PaySDK 认不出不是它发起的支付，会返回
+     * false 交给 OpenSDK 的 {@code onResp}，见 EntryActivity。
+     */
+    private boolean sendPaymentRequestByOpenSdk(JSONObject params, CallbackContext callbackContext) {
+        final PayReq req = new PayReq();
+
+        try {
+            req.appId = getAppId(preferences);
+            req.partnerId = params.has("mch_id") ? params.getString("mch_id") : params.getString("partnerid");
+            req.prepayId = params.has("prepay_id") ? params.getString("prepay_id") : params.getString("prepayid");
+            req.nonceStr = params.has("nonce") ? params.getString("nonce") : params.getString("noncestr");
+            req.timeStamp = params.getString("timestamp");
+            req.sign = params.getString("sign");
+            req.packageValue = params.has("package") ? params.getString("package") : "Sign=WXPay";
+        } catch (Exception e) {
+            Log.e(TAG, e.getMessage());
+
+            callbackContext.error(ERROR_INVALID_PARAMETERS);
+            return true;
+        }
+
+        final IWXAPI api = getWxAPI(cordova.getActivity());
+
+        if (api != null && api.sendReq(req)) {
+            Log.i(TAG, "Payment request has been sent successfully by OpenSDK.");
+
+            // send no result
+            sendNoResultPluginResult(callbackContext);
+        } else {
+            Log.i(TAG, "Payment request has been sent unsuccessfully by OpenSDK.");
+
+            // send error
+            callbackContext.error(ERROR_SEND_REQUEST_FAILED);
         }
 
         return true;
