@@ -64,6 +64,11 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
      * <p>不能两条都走：微信只回跳一次，都处理会让同一笔结果兑现两遍。先问 PaySDK 是安全的，
      * 它认不出来时返回 false 且不回调。
      *
+     * <p><b>App 支付回包一律被 PaySDK 认领，包括 UAT 指定用 OpenSDK 发起的那些</b>（见
+     * {@link Wechat#KEY_UAT_APPPAY_SDK}）：两边组出的 wire 逐字相同，PaySDK 无从分辨。所以
+     * {@link #onResp} 里的 {@code COMMAND_PAY_BY_WX} 分支对支付而言走不到，别照着它推断支付回包
+     * 的形状；也别指望从回包日志区分发起方，那只能看发起侧的日志。
+     *
      * <p>支付回调交给 {@link #deliverPayResult}，其余命令仍走 {@link #onResp}。两者的投递方式
      * 保持一致：拿不到挂起的 JS 回调就拉起主界面（冷启动回包），成功转 JSON，失败按错误码给
      * 文案，最后 finish。

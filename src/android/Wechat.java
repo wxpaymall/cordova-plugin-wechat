@@ -486,8 +486,13 @@ public class Wechat extends CordovaPlugin {
      * <p>参数取法与 PaySDK 分支逐字对齐（两套下单 JSON 的字段名都兼容），appId 同样取
      * {@code getAppId(preferences)}——同 appid、同包名、同签名，不涉及开放平台另行登记。
      *
-     * <p>回包仍落在 {@code .wxapi.WXPayEntryActivity}：PaySDK 认不出不是它发起的支付，会返回
-     * false 交给 OpenSDK 的 {@code onResp}，见 EntryActivity。
+     * <p>回包落在 {@code .wxapi.WXPayEntryActivity}，与 PaySDK 分支同一个落点，并且<b>同样由
+     * PaySDK 认领</b>：两边组出的 wire 逐字相同（{@code _wxapi_payreq_*} 加
+     * {@code COMMAND_PAY_BY_WX}），PaySDK 无从分辨也就不做分辨，这条链路走不到 OpenSDK 的
+     * {@code onResp}。结果不受影响——errCode 原样透传不做归一，失败文案与 {@code onResp} 同码值
+     * 分支逐字一致，JS 侧也只把成功回包写进日志、不读字段。见 EntryActivity。
+     *
+     * <p>代价是回包日志分不出发起方，UAT 要认某笔走了哪条链路，只能看下面那行发起日志。
      */
     private boolean sendPaymentRequestByOpenSdk(JSONObject params, CallbackContext callbackContext) {
         final PayReq req = new PayReq();
