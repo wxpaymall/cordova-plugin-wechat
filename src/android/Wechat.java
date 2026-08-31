@@ -2,7 +2,9 @@ package xu.li.cordova.wechat;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Build;
@@ -108,10 +110,13 @@ public class Wechat extends CordovaPlugin {
      * UAT 要在同一批用例里覆盖两条支付链路，由平台下发的下单参数逐笔指定本次用哪个 SDK 发起。
      *
      * <p>只有显式传 {@code opensdk} 才切到 OpenSDK 老通道，缺失与未知值一律走 PaySDK——商城仍是
-     * 商户接入的对照组，不带这个参数时代码路径与没有这个开关时逐字一致。UAT 侧「不配开关默认跑
-     * 老通道」是测试策略，在脚本层兜底，不下沉到这里。
+     * 商户接入的对照组，不带这个参数时代码路径与没有这个开关时逐字一致。
      *
-     * <p>商城 UI 上没有、也不应该有任何选择入口：这个键只可能来自 UAT 构造的下单 URL。
+     * <p>真实 UAT 下单回的是 {@code mmpay.fun://openview?urlb64=...}，H5 再调
+     * {@code sendPaymentRequest} 时 JSON 里没有这个键。脚本把开关挂在 scheme 的 query 上，
+     * native 从拉起 Intent 读取；{@code datab64} 那条深链若 JSON 里带了这个键，仍然优先生效。
+     *
+     * <p>商城 UI 上没有、也不应该有任何选择入口：这个键只可能来自 UAT 构造的拉起 URL。
      */
     public static final String KEY_UAT_APPPAY_SDK = "uat_wxpaymall_apppay_sdk";
     public static final String APPPAY_SDK_OPENSDK = "opensdk";
@@ -138,6 +143,12 @@ public class Wechat extends CordovaPlugin {
     private static Wechat instance;
     private static Activity cordovaActivity;
     private static String extinfo;
+    /**
+     * 本笔支付从拉起 Intent 上读到的 SDK 选择。新的带 data 的 Intent 没带这个 query 就清空，
+     * 避免上一笔 {@code opensdk} 污染下一笔缺省支付。没有 data 的 Intent（微信回跳之类）
+     * 不动它，免得 H5 调 {@code sendPaymentRequest} 之前被清掉。
+     */
+    private static String uatAppPaySdkFromLaunch = "";
 
     @Override
     protected void pluginInitialize() {
@@ -167,6 +178,7 @@ public class Wechat extends CordovaPlugin {
         // 保存引用
         instance = this;
         cordovaActivity = cordova.getActivity();
+        captureUatAppPaySdkFromIntent(cordova.getActivity().getIntent());
         if (extinfo != null) {
             transmitLaunchFromWX(extinfo);
         }
@@ -198,6 +210,44 @@ public class Wechat extends CordovaPlugin {
         super.onDestroy();
         instance = null;
         cordovaActivity = null;
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // LaunchMyApp 不 setIntent，getIntent() 在热启动时仍是上一笔。必须从参数读。
+        captureUatAppPaySdkFromIntent(intent);
+    }
+
+    /**
+     * 从拉起虚拟商城的 Intent URI query 取出 {@link #KEY_UAT_APPPAY_SDK}。
+     * 有 data 的 Intent 没带这个键就清空缓存；没有 data 的 Intent 不动缓存。
+     */
+    private void captureUatAppPaySdkFromIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        Uri data = intent.getData();
+        if (data == null) {
+            return;
+        }
+        String fromUri = data.getQueryParameter(KEY_UAT_APPPAY_SDK);
+        uatAppPaySdkFromLaunch = fromUri == null ? "" : fromUri;
+        if (!uatAppPaySdkFromLaunch.isEmpty()) {
+            Log.d(TAG, "captured " + KEY_UAT_APPPAY_SDK + "=" + uatAppPaySdkFromLaunch
+                    + " from launch intent");
+        }
+    }
+
+    /**
+     * JSON 里有键用 JSON（datab64 深链还能用）；没有就用拉起 Intent 上挂的 query。
+     */
+    private String resolveUatAppPaySdk(JSONObject params) {
+        String fromParams = params.optString(KEY_UAT_APPPAY_SDK);
+        if (fromParams != null && !fromParams.isEmpty()) {
+            return fromParams;
+        }
+        return uatAppPaySdkFromLaunch == null ? "" : uatAppPaySdkFromLaunch;
     }
 
     /**
@@ -433,7 +483,8 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
-        if (APPPAY_SDK_OPENSDK.equals(params.optString(KEY_UAT_APPPAY_SDK))) {
+        // 只有精确等于 opensdk 才走 OpenSDK，其它（没配 / paysdk / 拼错）一律 PaySDK。
+        if (APPPAY_SDK_OPENSDK.equals(resolveUatAppPaySdk(params))) {
             return sendPaymentRequestByOpenSdk(params, callbackContext);
         }
 
