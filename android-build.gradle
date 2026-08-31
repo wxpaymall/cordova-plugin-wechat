@@ -5,7 +5,7 @@ repositories {
 dependencies {
     // 分享、授权、小程序、业务视图仍走 OpenSDK；只有支付换成 PaySDK。
     // 钉住版本：PaySDK 与 OpenSDK 之间有 wire 常量上的对齐要求，浮动版本会让对齐失效而不报错。
-    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.34'
+    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.40'
 
     def paySdkDirectory = project.file('src/main/paysdk-libs')
     def paySdkCore = new File(paySdkDirectory, 'wechat-paysdk-android-1.0.0.aar')
