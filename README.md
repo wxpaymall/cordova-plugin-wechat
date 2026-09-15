@@ -45,6 +45,18 @@ cordova build ios
 cordova build android
 ```
 
+## Android 构建前提：需在内网
+
+Android 端的支付由 PaySDK 承接，它以 Maven 坐标 `com.tencent.mm.paysdk:wechat-paysdk-android`
+声明在 `android-build.gradle` 中，仓库指向 `mirrors.tencent.com/repository/maven/wechat-releases`。
+
+该仓库匿名可读，不需要配置任何凭据，但**只在公司网络内可解析**：`mirrors.tencent.com` 的公网那
+一面是开源软件镜像站，`/repository/maven/` 下的制品仓库只对内网开放，外网访问会拿到 404。
+
+所以 `cordova build android` 目前只能在内网环境下执行，在外网会停在 Gradle 解析依赖那一步，报
+找不到 `com.tencent.mm.paysdk:wechat-paysdk-android`。等 PaySDK 发布到 Maven Central 后，此限制
+解除。iOS 端不涉及 PaySDK，不受影响。
+
 # Usage 
 
 ## Check if wechat is installed

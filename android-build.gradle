@@ -1,18 +1,24 @@
 repositories {
+    // PaySDK 从这里拉。该仓库匿名可读，不需要 credentials。
+    //
+    // 但它只在公司网络内可解析：mirrors.tencent.com 的公网那一面是开源软件镜像站，
+    // /repository/maven/ 下的制品仓库只对内网开放，外网访问会拿到 404。所以本插件目前只有内网
+    // 能编译，在外网 clone 下来 Gradle 会直接失败。等 PaySDK 发到 Maven Central，这行才能去掉。
+    maven { url 'https://mirrors.tencent.com/repository/maven/wechat-releases' }
     mavenCentral()
 }
 
 dependencies {
     // 分享、授权、小程序、业务视图仍走 OpenSDK；只有支付换成 PaySDK。
     // 钉住版本：PaySDK 与 OpenSDK 之间有 wire 常量上的对齐要求，浮动版本会让对齐失效而不报错。
+    //
+    // OpenSDK 继续从 Central 拉：wechat-releases 上最新只到 6.8.39，没有这里要的 6.8.40，
+    // Gradle 会按声明顺序回落到 mavenCentral()。
     implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.40'
 
-    def paySdkDirectory = project.file('src/main/paysdk-libs')
-    def paySdkCore = new File(paySdkDirectory, 'wechat-paysdk-android-1.0.0.aar')
-    // 缺失时直接失败：AAR 由 paysdk 仓库的 syncPluginAars 写入，静默少一个会编出一个
-    // 支付永远拉不起来的包。
-    if (!paySdkCore.isFile()) {
-        throw new GradleException("Missing PaySDK artifact: ${paySdkCore}")
-    }
-    implementation files(paySdkCore)
+    // 同样钉不可变版本，不用 -SNAPSHOT：快照可被覆盖，会让同一行依赖在不同时间编出不同产物。
+    //
+    // 这里原先引的是本仓库 src/android/libs 下的 AAR 文件，靠人在两个仓库间手工同步，内容漂移
+    // 了坐标却不变——0.1.0 那次就是这样静默停在旧产物上的。改成坐标后，升版只需要改这一行版本号。
+    implementation 'com.tencent.mm.paysdk:wechat-paysdk-android:1.0.0'
 }
