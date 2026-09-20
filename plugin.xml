@@ -17,6 +17,8 @@
     <!-- <preference name="WECHATAPPID" value="YOUR_WECHAT_APP_ID_HERE" /> -->
     <preference name="WECHATAPPID" />
     <preference name="UNIVERSALLINK" />
+    <!-- 只有内部测试包会关掉：商城的 release 包不做商户签名校验，装到测试机上才能起来。 -->
+    <preference name="WECHAT_SIGNATURE_CHECK" default="true" />
 
     <!-- js module-->
     <js-module src="www/wechat.js" name="Wechat">
@@ -100,6 +102,7 @@
                 <param name="android-package" value="xu.li.cordova.wechat.Wechat"/>
             </feature>
             <preference name="WECHATAPPID" value="$WECHATAPPID"/>
+            <preference name="WECHAT_SIGNATURE_CHECK" value="$WECHAT_SIGNATURE_CHECK"/>
         </config-file>
 
         <config-file target="AndroidManifest.xml" parent="/*">
@@ -141,6 +144,10 @@
 
         <source-file src="src/android/Wechat.java" target-dir="src/xu/li/cordova/wechat" />
         <source-file src="src/android/Util.java" target-dir="src/xu/li/cordova/wechat" />
+
+        <!-- PaySDK 承接支付，作为 Maven 坐标声明在 android-build.gradle 里，本仓库不再存放 AAR。
+             resource-file 那条声明必须跟着一起删：它的 src 指向仓库内的文件，文件没了 cordova
+             会在安装插件时直接失败。 -->
         <framework src="android-build.gradle" custom="true" type="gradleReference" />
     </platform>
 </plugin>

@@ -1,7 +1,62 @@
+/*
+ * PaySDK 版本默认锁已发布的内网正式版，商户与正式包拿到的都是这个。
+ *
+ * UAT 要验的功能常常还没发正式版（例如码上付只在 paysdk 主干上，release 分支的特性已冻结），
+ * 这种场景在构建时覆盖即可：
+ *
+ *   cordova build android -- --gradleArg=-PpaysdkVersion=1.1.0-SNAPSHOT
+ *
+ * 快照不作默认值：它可被覆盖，同一个坐标在不同时刻拉到的产物可能不同，正式包不能建立在这种
+ * 引用上。
+ */
+def paysdkVersion = project.findProperty('paysdkVersion') ?: '1.0.0'
+
 repositories {
+    // PaySDK 在这两个仓库里，均匿名可读、不需要 credentials。releases 放正式版，snapshots 放
+    // 主干快照；后者只有 paysdkVersion 被覆盖成 -SNAPSHOT 时才会命中。
+    //
+    // 它们只在公司网络内可解析：mirrors.tencent.com 的公网那一面是开源软件镜像站，
+    // /repository/maven/ 下的制品仓库只对内网开放，外网访问会拿到 404。所以本插件目前只有内网
+    // 能编译，在外网 clone 下来 Gradle 会直接失败。等 PaySDK 发到 Maven Central，这两行才能去掉。
+    //
+    // includeGroup 不是优化，是下面那行 OpenSDK 浮动版本能成立的前提：这两个仓库里也有
+    // com.tencent.mm.opensdk，snapshots 上还躺着比 Central 正式版更高的 6.8.41-SNAPSHOT。动态
+    // 版本会跨所有仓库聚合候选再取最高，不限定的话 '+' 会挑中那个快照——而快照可反复覆盖。
+    maven {
+        url 'https://mirrors.tencent.com/repository/maven/wechat-releases'
+        content { includeGroup 'com.tencent.mm.paysdk' }
+    }
+    maven {
+        url 'https://mirrors.tencent.com/repository/maven/wechat-snapshots'
+        content { includeGroup 'com.tencent.mm.paysdk' }
+    }
     mavenCentral()
 }
 
+// 快照是可变的。Gradle 默认把它缓存 24 小时，于是会出现「主干推了新快照，但 UAT 包里还是昨天
+// 那份」——正是 vendored 时代手工同步漏掉一次就静默停在旧产物的那类问题，只是换了个位置发生。
+// 只在用快照时放宽，正式版是不可变的，缓存它没有风险。
+if (paysdkVersion.endsWith('-SNAPSHOT')) {
+    configurations.all {
+        resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
+    }
+}
+
 dependencies {
-    api 'com.tencent.mm.opensdk:wechat-sdk-android:+'
+    // 分享、授权、小程序、业务视图仍走 OpenSDK；只有支付换成 PaySDK。
+    //
+    // 版本保持浮动（与本插件主干一致）。之所以敢浮动，是因为它影响不到支付：PaySDK 的支付链路
+    // 零 OpenSDK 依赖，paysdk 仓库的 scanReleaseAar 会在 AAR 或发布 POM 里发现
+    // com.tencent.mm.opensdk 时直接让构建失败，所以这里取哪个 OpenSDK 版本都不改变支付的 wire。
+    // 剩下那四条能力由上游负责兼容，浮动可以白捡它的修复。
+    //
+    // 代价照旧：构建不可复现，上游发一版就能在本仓库零改动的情况下弄坏商城构建，而排查方向会
+    // 指向我们自己的改动。要复现某个包就在构建时钉住。
+    //
+    // 上面 includeGroup 是这行的前提，别删——不限定仓库时 '+' 会落到内网的 OpenSDK 快照上。
+    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:+'
+
+    // 这里原先引的是本仓库 src/android/libs 下的 AAR 文件，靠人在两个仓库间手工同步，内容漂移
+    // 了坐标却不变——0.1.0 那次就这样静默停在旧产物上。改成坐标后，升版只需要改上面那行默认值。
+    implementation "com.tencent.mm.paysdk:wechat-paysdk-android:${paysdkVersion}"
 }
