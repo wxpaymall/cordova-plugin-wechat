@@ -18,8 +18,18 @@ repositories {
     // 它们只在公司网络内可解析：mirrors.tencent.com 的公网那一面是开源软件镜像站，
     // /repository/maven/ 下的制品仓库只对内网开放，外网访问会拿到 404。所以本插件目前只有内网
     // 能编译，在外网 clone 下来 Gradle 会直接失败。等 PaySDK 发到 Maven Central，这两行才能去掉。
-    maven { url 'https://mirrors.tencent.com/repository/maven/wechat-releases' }
-    maven { url 'https://mirrors.tencent.com/repository/maven/wechat-snapshots' }
+    //
+    // includeGroup 不是优化，是下面那行 OpenSDK 浮动版本能成立的前提：这两个仓库里也有
+    // com.tencent.mm.opensdk，snapshots 上还躺着比 Central 正式版更高的 6.8.41-SNAPSHOT。动态
+    // 版本会跨所有仓库聚合候选再取最高，不限定的话 '+' 会挑中那个快照——而快照可反复覆盖。
+    maven {
+        url 'https://mirrors.tencent.com/repository/maven/wechat-releases'
+        content { includeGroup 'com.tencent.mm.paysdk' }
+    }
+    maven {
+        url 'https://mirrors.tencent.com/repository/maven/wechat-snapshots'
+        content { includeGroup 'com.tencent.mm.paysdk' }
+    }
     mavenCentral()
 }
 
@@ -34,11 +44,17 @@ if (paysdkVersion.endsWith('-SNAPSHOT')) {
 
 dependencies {
     // 分享、授权、小程序、业务视图仍走 OpenSDK；只有支付换成 PaySDK。
-    // 钉住版本：PaySDK 与 OpenSDK 之间有 wire 常量上的对齐要求，浮动版本会让对齐失效而不报错。
     //
-    // OpenSDK 继续从 Central 拉：wechat-releases 上最新只到 6.8.39，没有这里要的 6.8.40，
-    // Gradle 会按声明顺序回落到 mavenCentral()。
-    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:6.8.40'
+    // 版本保持浮动（与本插件主干一致）。之所以敢浮动，是因为它影响不到支付：PaySDK 的支付链路
+    // 零 OpenSDK 依赖，paysdk 仓库的 scanReleaseAar 会在 AAR 或发布 POM 里发现
+    // com.tencent.mm.opensdk 时直接让构建失败，所以这里取哪个 OpenSDK 版本都不改变支付的 wire。
+    // 剩下那四条能力由上游负责兼容，浮动可以白捡它的修复。
+    //
+    // 代价照旧：构建不可复现，上游发一版就能在本仓库零改动的情况下弄坏商城构建，而排查方向会
+    // 指向我们自己的改动。要复现某个包就在构建时钉住。
+    //
+    // 上面 includeGroup 是这行的前提，别删——不限定仓库时 '+' 会落到内网的 OpenSDK 快照上。
+    implementation 'com.tencent.mm.opensdk:wechat-sdk-android:+'
 
     // 这里原先引的是本仓库 src/android/libs 下的 AAR 文件，靠人在两个仓库间手工同步，内容漂移
     // 了坐标却不变——0.1.0 那次就这样静默停在旧产物上。改成坐标后，升版只需要改上面那行默认值。
