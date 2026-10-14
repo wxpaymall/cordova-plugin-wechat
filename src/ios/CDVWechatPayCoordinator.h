@@ -4,12 +4,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef BOOL (^CDVWechatCallbackHandler)(void);
 
-/// Owns the single in-flight AppPay callback independently from OpenSDK callbacks.
+/// Routes SDK callbacks and normalizes PaySDK result payloads.
 @interface CDVWechatPayCoordinator : NSObject
-
-- (BOOL)beginPaymentWithCallbackId:(NSString *)callbackId;
-- (void)cancelPaymentWithCallbackId:(NSString *)callbackId;
-- (nullable NSString *)consumePaymentCallbackId;
 
 + (BOOL)routePaySDK:(CDVWechatCallbackHandler)paySDK
             openSDK:(CDVWechatCallbackHandler)openSDK;

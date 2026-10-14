@@ -6,7 +6,7 @@ const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
 
-test('Objective-C payment coordinator enforces callback isolation and routing', () => {
+test('Objective-C payment helper routes callbacks and builds result payloads', () => {
   const executable = path.join(os.tmpdir(), `ios-paysdk-behavior-${process.pid}`);
   const compile = spawnSync('xcrun', [
     'clang',

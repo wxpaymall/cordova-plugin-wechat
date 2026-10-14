@@ -30,4 +30,9 @@ test('iOS AppPay uses vendored PaySDK and PaySDK-first callbacks', () => {
   assert.doesNotMatch(implementation, /currentPayPrepayId|@"prepayId"/);
   assert.doesNotMatch(coordinator, /@"prepayId"/);
   assert.doesNotMatch(paymentMethod[0], /\[WXApi sendReq:/);
+  assert.doesNotMatch(paymentMethod[0], /已有支付请求处理中|beginPaymentWithCallbackId/);
+  assert.match(
+    paymentMethod[0],
+    /if \(result\.isSent\) \{[\s\S]*?self\.currentCallbackId = command\.callbackId;/
+  );
 });
