@@ -78,14 +78,42 @@
         <header-file src="src/ios/libs/OpenSDK2.0.4/WechatAuthSDK.h" />
         <source-file src="src/ios/libs/OpenSDK2.0.4/libWeChatSDK.a" framework="true" />
 
+        <!-- Wechat PaySDK -->
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WechatPaySDK.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayAppPayRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayAppPayResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayCapability.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayConfig.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayInsuranceRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayInsuranceResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayJointPayRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayJointPayResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayKit.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayLogger.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayNontaxRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayNontaxResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayOfflineRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayOfflineResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayQrCodeRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayQrCodeResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPayResultHandler.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySceneRequest.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySceneResult.h" />
+        <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySendResult.h" />
+        <source-file src="src/ios/libs/WechatPaySDK1.0.0/libWechatPaySDK.a" framework="true" />
+
         <!-- Other required frameworks -->
         <framework src="libz.tbd" />
         <framework src="libsqlite3.0.tbd" />
+        <framework src="CoreImage.framework" />
         <framework src="CoreTelephony.framework" />
         <framework src="SystemConfiguration.framework" />
         <framework src="Security.framework" />
         <framework src="CFNetwork.framework" />
         <framework src="CoreGraphics.framework" />
+        <framework src="UIKit.framework" />
         <framework src="Webkit.framework" />
         <framework src="libc++.1.tbd" />
     </platform>

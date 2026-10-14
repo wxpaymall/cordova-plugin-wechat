@@ -9,6 +9,7 @@
 #import <Cordova/CDV.h>
 #import "WXApi.h"
 #import "WXApiObject.h"
+#import "WechatPaySDK.h"
 
 enum  CDVWechatSharingType {
     CDVWXSharingTypeApp = 1,
@@ -21,9 +22,10 @@ enum  CDVWechatSharingType {
     CDVWXSharingTypeMini
 };
 
-@interface CDVWechat:CDVPlugin <WXApiDelegate>
+@interface CDVWechat:CDVPlugin <WXApiDelegate, WXPayResultHandler>
 
 @property (nonatomic, strong) NSString *currentCallbackId;
+@property (nonatomic, strong) NSString *currentPayPrepayId;
 @property (nonatomic, strong) NSString *wechatAppId;
 
 - (void)isWXAppInstalled:(CDVInvokedUrlCommand *)command;

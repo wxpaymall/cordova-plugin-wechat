@@ -21,6 +21,8 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     if (appId && ![appId isEqualToString:self.wechatAppId]) {
         self.wechatAppId = appId;
         [WXApi registerApp: appId universalLink: universalLink];
+        WXPayConfig *config = [[WXPayConfig alloc] initWithAppId:appId universalLink:universalLink];
+        [WXPayKit initWithConfig:config];
         
         NSLog(@"cordova-plugin-wechat has been initialized. Wechat SDK Version: %@. APP_ID: %@. universalLink: %@", [WXApi getApiVersion], appId, universalLink);
     }
@@ -158,13 +160,7 @@ static int const MAX_THUMBNAIL_SIZE = 320;
         }
     }
 
-    PayReq *req = [[PayReq alloc] init];
-
-    // NSString *appId = [params objectForKey:requiredParams[5]];
-    // if (appId && ![appId isEqualToString:self.wechatAppId]) {
-    //     self.wechatAppId = appId;
-    //     [WXApi registerApp: appId];
-    // }
+    WXPayAppPayRequest *req = [[WXPayAppPayRequest alloc] init];
 
     req.partnerId = [params objectForKey:requiredParams[0]];
     req.prepayId = [params objectForKey:requiredParams[1]];
@@ -177,12 +173,14 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     }
     req.sign = [params objectForKey:requiredParams[4]];
     
-    [WXApi sendReq:(BaseReq *)req completion:^(BOOL success) {
-       if (success) {
-           self.currentCallbackId = command.callbackId;
-       } else {
-           [self failWithCallbackID:command.callbackId withMessage:@"发送请求失败"];
-       }
+    [WXPayKit send:req completion:^(WXPaySendResult *result) {
+        if (result.isSent) {
+            self.currentCallbackId = command.callbackId;
+            self.currentPayPrepayId = req.prepayId;
+        } else {
+            [self failWithCallbackID:command.callbackId withMessage:result.message];
+            self.currentPayPrepayId = nil;
+        }
     }];
 }
 
@@ -420,6 +418,26 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     self.currentCallbackId = nil;
 }
 
+#pragma mark "WXPayResultHandler"
+
+- (void)onAppPayResult:(WXPayAppPayResult *)result
+{
+    NSDictionary *response = @{
+        @"errCode": @(result.errCode),
+        @"errStr": result.errMessage ?: @"",
+        @"prepayId": self.currentPayPrepayId ?: @"",
+        @"fromAppQrPay": @(result.fromAppQrPay),
+    };
+
+    CDVCommandStatus status = result.isSuccess ? CDVCommandStatus_OK : CDVCommandStatus_ERROR;
+    CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:status messageAsDictionary:response];
+    [self.commandDelegate sendPluginResult:commandResult callbackId:self.currentCallbackId];
+
+    // 客户端回包仅用于驱动界面或查单，不能作为支付成功落账证据。
+    self.currentCallbackId = nil;
+    self.currentPayPrepayId = nil;
+}
+
 #pragma mark "CDVPlugin Overrides"
 
 - (void)handleOpenURL:(NSNotification *)notification
@@ -428,7 +446,9 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 
     if ([url isKindOfClass:[NSURL class]] && [url.scheme isEqualToString:self.wechatAppId])
     {
-        [WXApi handleOpenURL:url delegate:self];
+        if (![WXPayKit handleOpenURL:url handler:self]) {
+            [WXApi handleOpenURL:url delegate:self];
+        }
     }
 }
 
@@ -655,10 +675,16 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 }
 
 - (BOOL)handleUserActivity:(NSUserActivity *)userActivity {
-   return [WXApi handleOpenUniversalLink:userActivity delegate:self];
+    if ([WXPayKit handleUniversalLink:userActivity handler:self]) {
+        return YES;
+    }
+    return [WXApi handleOpenUniversalLink:userActivity delegate:self];
 }
 
 - (BOOL)handleWechatOpenURL:(NSURL *)url  {
+    if ([WXPayKit handleOpenURL:url handler:self]) {
+        return YES;
+    }
     return [WXApi handleOpenURL:url delegate:self];
 }
 
