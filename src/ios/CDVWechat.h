@@ -25,7 +25,6 @@ enum  CDVWechatSharingType {
 @interface CDVWechat:CDVPlugin <WXApiDelegate, WXPayResultHandler>
 
 @property (nonatomic, strong) NSString *currentCallbackId;
-@property (nonatomic, strong) NSString *currentPayPrepayId;
 @property (nonatomic, strong) NSString *wechatAppId;
 
 - (void)isWXAppInstalled:(CDVInvokedUrlCommand *)command;
