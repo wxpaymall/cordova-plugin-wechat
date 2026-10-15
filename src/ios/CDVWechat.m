@@ -7,6 +7,7 @@
 //
 
 #import "CDVWechat.h"
+#import "CDVWechatPayCoordinator.h"
 
 static int const MAX_THUMBNAIL_SIZE = 320;
 
@@ -17,10 +18,12 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     NSString* appId = [[self.commandDelegate settings] objectForKey:@"wechatappid"];
     
     NSString* universalLink = [[self.commandDelegate settings] objectForKey:@"universallink"];
-    
+
     if (appId && ![appId isEqualToString:self.wechatAppId]) {
         self.wechatAppId = appId;
         [WXApi registerApp: appId universalLink: universalLink];
+        WXPayConfig *config = [[WXPayConfig alloc] initWithAppId:appId universalLink:universalLink];
+        [WXPayKit initWithConfig:config];
         
         NSLog(@"cordova-plugin-wechat has been initialized. Wechat SDK Version: %@. APP_ID: %@. universalLink: %@", [WXApi getApiVersion], appId, universalLink);
     }
@@ -158,13 +161,7 @@ static int const MAX_THUMBNAIL_SIZE = 320;
         }
     }
 
-    PayReq *req = [[PayReq alloc] init];
-
-    // NSString *appId = [params objectForKey:requiredParams[5]];
-    // if (appId && ![appId isEqualToString:self.wechatAppId]) {
-    //     self.wechatAppId = appId;
-    //     [WXApi registerApp: appId];
-    // }
+    WXPayAppPayRequest *req = [[WXPayAppPayRequest alloc] init];
 
     req.partnerId = [params objectForKey:requiredParams[0]];
     req.prepayId = [params objectForKey:requiredParams[1]];
@@ -177,12 +174,13 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     }
     req.sign = [params objectForKey:requiredParams[4]];
     
-    [WXApi sendReq:(BaseReq *)req completion:^(BOOL success) {
-       if (success) {
-           self.currentCallbackId = command.callbackId;
-       } else {
-           [self failWithCallbackID:command.callbackId withMessage:@"发送请求失败"];
-       }
+    [WXPayKit send:req completion:^(WXPaySendResult *result) {
+        if (result.isSent) {
+            // 与原 OpenSDK 插件一致：发送成功后记录最新一笔 callback，不额外拒绝后续请求。
+            self.currentCallbackId = command.callbackId;
+        } else {
+            [self failWithCallbackID:command.callbackId withMessage:result.message];
+        }
     }];
 }
 
@@ -420,6 +418,31 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     self.currentCallbackId = nil;
 }
 
+#pragma mark "WXPayResultHandler"
+
+- (void)onAppPayResult:(WXPayAppPayResult *)result
+{
+    NSString *callbackId = self.currentCallbackId;
+    if (callbackId == nil) {
+        // 冷启动或进程重建后没有可证明归属的 Cordova callback：丢弃客户端结果，
+        // 不缓存到下一笔支付，业务必须依赖服务端订单状态查单。
+        NSLog(@"cordova-plugin-wechat dropped AppPay result without an active payment callback");
+        return;
+    }
+
+    NSDictionary *response =
+        [CDVWechatPayCoordinator payloadWithErrCode:result.errCode
+                                            errStr:result.errMessage
+                                  fromAppQrPay:result.fromAppQrPay];
+
+    CDVCommandStatus status = result.isSuccess ? CDVCommandStatus_OK : CDVCommandStatus_ERROR;
+    CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:status messageAsDictionary:response];
+    [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
+
+    // 客户端回包仅用于驱动界面或查单，不能作为支付成功落账证据。
+    self.currentCallbackId = nil;
+}
+
 #pragma mark "CDVPlugin Overrides"
 
 - (void)handleOpenURL:(NSNotification *)notification
@@ -428,7 +451,11 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 
     if ([url isKindOfClass:[NSURL class]] && [url.scheme isEqualToString:self.wechatAppId])
     {
-        [WXApi handleOpenURL:url delegate:self];
+        [CDVWechatPayCoordinator routePaySDK:^BOOL{
+            return [WXPayKit handleOpenURL:url handler:self];
+        } openSDK:^BOOL{
+            return [WXApi handleOpenURL:url delegate:self];
+        }];
     }
 }
 
@@ -655,11 +682,19 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 }
 
 - (BOOL)handleUserActivity:(NSUserActivity *)userActivity {
-   return [WXApi handleOpenUniversalLink:userActivity delegate:self];
+    return [CDVWechatPayCoordinator routePaySDK:^BOOL{
+        return [WXPayKit handleUniversalLink:userActivity handler:self];
+    } openSDK:^BOOL{
+        return [WXApi handleOpenUniversalLink:userActivity delegate:self];
+    }];
 }
 
 - (BOOL)handleWechatOpenURL:(NSURL *)url  {
-    return [WXApi handleOpenURL:url delegate:self];
+    return [CDVWechatPayCoordinator routePaySDK:^BOOL{
+        return [WXPayKit handleOpenURL:url handler:self];
+    } openSDK:^BOOL{
+        return [WXApi handleOpenURL:url delegate:self];
+    }];
 }
 
 @end
