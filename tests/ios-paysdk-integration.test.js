@@ -11,6 +11,10 @@ const coordinator = fs.readFileSync(
   path.join(root, 'src/ios/CDVWechatPayCoordinator.m'),
   'utf8'
 );
+const paySdkFramework = path.join(
+  root,
+  'src/ios/libs/WechatPaySDK1.0.0/WechatPaySDK.xcframework'
+);
 
 test('iOS AppPay uses vendored PaySDK and PaySDK-first callbacks', () => {
   const paymentMethod = implementation.match(
@@ -18,7 +22,18 @@ test('iOS AppPay uses vendored PaySDK and PaySDK-first callbacks', () => {
   );
 
   assert.ok(paymentMethod, 'sendPaymentRequest implementation must exist');
-  assert.match(pluginXml, /WechatPaySDK1\.0\.0\/libWechatPaySDK\.a/);
+  assert.match(
+    pluginXml,
+    /<framework src="src\/ios\/libs\/WechatPaySDK1\.0\.0\/WechatPaySDK\.xcframework" custom="true" \/>/
+  );
+  assert.ok(fs.existsSync(path.join(
+    paySdkFramework,
+    'ios-arm64/WechatPaySDK.framework/WechatPaySDK'
+  )));
+  assert.ok(fs.existsSync(path.join(
+    paySdkFramework,
+    'ios-arm64_x86_64-simulator/WechatPaySDK.framework/WechatPaySDK'
+  )));
   assert.match(pluginXml, /deployment-target" default="12\.0"/);
   assert.match(header, /WXPayResultHandler/);
   assert.match(implementation, /CDVWechatPayCoordinator/);

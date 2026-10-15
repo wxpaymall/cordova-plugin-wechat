@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.tencent.WechatPaySDK</string>
+    <key>CFBundleExecutable</key>
+    <string>WechatPaySDK</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>FMWK</string>
+    <key>MinimumOSVersion</key>
+    <string>12.0</string>
+</dict>
+</plist>

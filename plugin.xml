@@ -107,7 +107,7 @@
         <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySceneRequest.h" />
         <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySceneResult.h" />
         <header-file src="src/ios/libs/WechatPaySDK1.0.0/WXPaySendResult.h" />
-        <source-file src="src/ios/libs/WechatPaySDK1.0.0/libWechatPaySDK.a" framework="true" />
+        <framework src="src/ios/libs/WechatPaySDK1.0.0/WechatPaySDK.xcframework" custom="true" />
 
         <!-- Other required frameworks -->
         <framework src="libz.tbd" />
