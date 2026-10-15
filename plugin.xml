@@ -42,6 +42,7 @@
         <config-file target="*-Info.plist" parent="LSApplicationQueriesSchemes">
             <array>
                 <string>weixin</string>
+                <string>weixinbeta</string>
                 <string>wechat</string>
                 <string>weixinULAPI</string>
                 <string>weixinURLParamsAPI</string>

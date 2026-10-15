@@ -20,6 +20,7 @@ test('iOS AppPay uses vendored PaySDK and PaySDK-first callbacks', () => {
   assert.ok(paymentMethod, 'sendPaymentRequest implementation must exist');
   assert.match(pluginXml, /WechatPaySDK1\.0\.0\/libWechatPaySDK\.a/);
   assert.match(pluginXml, /deployment-target" default="12\.0"/);
+  assert.match(pluginXml, /<string>weixinbeta<\/string>/);
   assert.match(header, /WXPayResultHandler/);
   assert.match(implementation, /CDVWechatPayCoordinator/);
   assert.match(implementation, /\[WXPayKit initWithConfig:/);
