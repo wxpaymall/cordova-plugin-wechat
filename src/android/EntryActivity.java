@@ -24,6 +24,7 @@ import com.tencent.mm.opensdk.openapi.IWXAPIEventHandler;
 import com.tencent.mm.paysdk.WechatPay;
 import com.tencent.mm.paysdk.WechatPayResultHandler;
 import com.tencent.mm.paysdk.model.AppPayResult;
+import com.tencent.mm.paysdk.model.PaySceneResult;
 
 import org.apache.cordova.CallbackContext;
 import org.json.JSONArray;
@@ -79,6 +80,11 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
             public void onAppPayResult(AppPayResult result) {
                 deliverPayResult(result);
             }
+
+            @Override
+            public void onPaySceneResult(PaySceneResult result) {
+                deliverPaySceneResult(result);
+            }
         };
 
         if (WechatPay.handleCallbackIntent(this, intent, payHandler)) {
@@ -130,6 +136,37 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
         } else {
             ctx.error(describePayFailure(result));
         }
+
+        finish();
+    }
+
+    /**
+     * 支付场景回包。成功、取消、失败都走 success 回调，整份字段交给 JS：失败的 errStr 是排障用的
+     * 原因短串（如 {@code caller_mismatch}），只给一句文案就看不出是哪一环拒的。
+     */
+    private void deliverPaySceneResult(PaySceneResult result) {
+        Log.d(Wechat.TAG, "onPaySceneResult - errCode:" + result.getErrCode()
+                + ", errStr:" + result.getErrMessage());
+
+        CallbackContext ctx = Wechat.getCurrentCallbackContext();
+
+        if (ctx == null) {
+            startMainActivity();
+            finish();
+            return;
+        }
+
+        JSONObject json = new JSONObject();
+        try {
+            json.put("errCode", result.getErrCode());
+            json.put("errStr", result.getErrMessage());
+            json.put("transaction", result.getTransaction());
+            json.put("sceneType", result.getSceneType());
+            json.put("extMsg", result.getExtMsg());
+        } catch (JSONException e) {
+            Log.d(Wechat.TAG, "put json error: " + e.getMessage());
+        }
+        ctx.success(json);
 
         finish();
     }

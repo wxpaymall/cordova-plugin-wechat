@@ -110,6 +110,29 @@ module.exports = {
     },
 
     /**
+     * 经 PaySDK 打开支付场景入口（仅 Android）
+     *
+     * onSuccess 收到微信回包 {errCode, errStr, transaction, sceneType, extMsg}，取消与失败也走这里；
+     * onError 只表示请求没送进微信。
+     *
+     * @example
+     * <code>
+     * Wechat.sendPaySceneRequest({
+     *     sceneType: 'ps_xxxxxxxxxxxx', // 运营系统分配的入口号
+     *     query: 'a=1',
+     *     extInfo: '{"k":"v"}'
+     * }, function (resp) {
+     *     alert(JSON.stringify(resp));
+     * }, function (reason) {
+     *     alert("Failed: " + reason);
+     * });
+     * </code>
+     */
+    sendPaySceneRequest: function (params, onSuccess, onError) {
+        exec(onSuccess, onError, "Wechat", "sendPaySceneRequest", [params]);
+    },
+
+    /**
      * 委托代扣App签约
      *
      * @link https://pay.weixin.qq.com/wiki/doc/api/wxpay_v2/papay/chapter3_2.shtml

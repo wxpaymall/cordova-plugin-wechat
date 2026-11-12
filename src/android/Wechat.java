@@ -36,6 +36,7 @@ import com.tencent.mm.opensdk.utils.ILog;
 import com.tencent.mm.paysdk.PayConfig;
 import com.tencent.mm.paysdk.WechatPay;
 import com.tencent.mm.paysdk.model.AppPayRequest;
+import com.tencent.mm.paysdk.model.PaySceneRequest;
 import com.tencent.mm.paysdk.model.SendResult;
 
 import org.apache.cordova.CallbackContext;
@@ -338,6 +339,8 @@ public class Wechat extends CordovaPlugin {
             return sendAuthRequest(args, callbackContext);
         } else if (action.equals("sendPaymentRequest")) {
             return sendPaymentRequest(args, callbackContext);
+        } else if (action.equals("sendPaySceneRequest")) {
+            return sendPaySceneRequest(args, callbackContext);
         } else if (action.equals("entrustAppSignContract")){
             return entrustAppSignContract(args, callbackContext);
         } else if (action.equals("isWXAppInstalled")) {
@@ -575,6 +578,45 @@ public class Wechat extends CordovaPlugin {
 
             // send error
             callbackContext.error(ERROR_SEND_REQUEST_FAILED);
+        }
+
+        return true;
+    }
+
+    /**
+     * 用 PaySDK command 1001 打开运营系统登记的支付场景入口（LiteApp）。
+     *
+     * <p>{@code sceneType} 填运营系统分配的入口号（{@code ps_} 开头）；{@code transaction} 不传时
+     * 由插件生成。结果由微信回跳 .wxapi.WXPayEntryActivity 送达，见 EntryActivity。
+     */
+    protected boolean sendPaySceneRequest(CordovaArgs args, CallbackContext callbackContext) {
+        final JSONObject params;
+        try {
+            params = args.getJSONObject(0);
+        } catch (JSONException e) {
+            callbackContext.error(ERROR_INVALID_PARAMETERS);
+            return true;
+        }
+
+        String transaction = params.optString("transaction", "");
+        if (transaction.isEmpty()) {
+            transaction = buildTransaction("payscene");
+        }
+        PaySceneRequest req = PaySceneRequest.builder()
+                .sceneType(params.optString("sceneType", ""))
+                .query(params.optString("query", ""))
+                .extInfo(params.optString("extInfo", ""))
+                .transaction(transaction)
+                .build();
+
+        SendResult sendResult = WechatPay.send(req);
+
+        if (sendResult.isSent()) {
+            Log.i(TAG, "PayScene request has been sent, transaction=" + transaction);
+            sendNoResultPluginResult(callbackContext);
+        } else {
+            Log.i(TAG, "PayScene request has been sent unsuccessfully: " + sendResult);
+            callbackContext.error(describeSendFailure(sendResult) + "（code=" + sendResult.getCode() + "）");
         }
 
         return true;
