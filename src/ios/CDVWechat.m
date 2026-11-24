@@ -184,6 +184,37 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     }];
 }
 
+- (void)sendPaySceneRequest:(CDVInvokedUrlCommand *)command
+{
+    NSDictionary *params = [command.arguments objectAtIndex:0];
+    if (![params isKindOfClass:[NSDictionary class]])
+    {
+        [self failWithCallbackID:command.callbackId withMessage:@"参数格式错误"];
+        return ;
+    }
+
+    NSString *transaction = [params objectForKey:@"transaction"];
+    if (![transaction isKindOfClass:[NSString class]] || transaction.length == 0) {
+        transaction = [NSString stringWithFormat:@"payscene%.0f", [[NSDate date] timeIntervalSince1970] * 1000];
+    }
+
+    WXPaySceneRequest *req = [[WXPaySceneRequest alloc] init];
+    req.sceneType = [params objectForKey:@"sceneType"];
+    req.query = [params objectForKey:@"query"];
+    req.extInfo = [params objectForKey:@"extInfo"];
+    req.transaction = transaction;
+
+    [WXPayKit send:req completion:^(WXPaySendResult *result) {
+        if (result.isSent) {
+            NSLog(@"cordova-plugin-wechat PayScene request has been sent, transaction=%@", transaction);
+            self.currentCallbackId = command.callbackId;
+        } else {
+            [self failWithCallbackID:command.callbackId
+                         withMessage:[NSString stringWithFormat:@"%@（code=%ld）", result.message, (long)result.code]];
+        }
+    }];
+}
+
 - (void)entrustAppSignContract:(CDVInvokedUrlCommand *)command
 {
   // check arguments
@@ -440,6 +471,27 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
 
     // 客户端回包仅用于驱动界面或查单，不能作为支付成功落账证据。
+    self.currentCallbackId = nil;
+}
+
+- (void)onScenePayResult:(WXPaySceneResult *)result
+{
+    NSString *callbackId = self.currentCallbackId;
+    if (callbackId == nil) {
+        NSLog(@"cordova-plugin-wechat dropped PayScene result without an active callback");
+        return;
+    }
+
+    NSDictionary *response = @{
+        @"errCode": @(result.errCode),
+        @"errStr": result.errMessage ?: @"",
+        @"transaction": result.transaction ?: @"",
+        @"sceneType": result.sceneType ?: @"",
+        @"extMsg": result.extMessage ?: @"",
+        @"openId": result.openId ?: @"",
+    };
+    CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:response];
+    [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
     self.currentCallbackId = nil;
 }
 

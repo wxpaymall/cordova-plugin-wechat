@@ -32,9 +32,36 @@ NS_SWIFT_NAME(WechatPayConfig)
  */
 @property (nonatomic, copy, readonly) NSString *universalLink;
 
+/**
+ 是否启用码上付，默认 YES，见 @c -configWithAppQrPayEnabled: 。
+
+ 开启只表示商户允许；这一笔是否真的展码，还要看后台放量和本机条件。
+ */
+@property (nonatomic, readonly) BOOL appQrPayEnabled;
+
 /** @c appId 或 @c universalLink 传 nil 时收成空串，由发送链路判成参数错误，不抛出。 */
 - (instancetype)initWithAppId:(nullable NSString *)appId
-                universalLink:(nullable NSString *)universalLink NS_DESIGNATED_INITIALIZER;
+                universalLink:(nullable NSString *)universalLink;
+
+- (instancetype)initWithAppId:(nullable NSString *)appId
+                universalLink:(nullable NSString *)universalLink
+              appQrPayEnabled:(BOOL)appQrPayEnabled NS_DESIGNATED_INITIALIZER;
+
+/**
+ 返回一份只改了码上付开关的新配置，其余配置项原样保留，本对象不变。
+
+ 码上付：本机未安装微信时，App 支付改为展示一张付款二维码，由另一台已登录微信的设备扫码代付。
+ 默认开启。关闭后 App 支付在微信不可用时按原有逻辑返回失败，SDK 不再展码。
+ 只能关、不能强开，放量仍由后台在签发时决定。
+
+ @code
+ [WXPayKit initWithConfig:[[[WXPayConfig alloc] initWithAppId:@"wxYOUR_APP_ID"
+                                                universalLink:@"https://example.com/app/"]
+                              configWithAppQrPayEnabled:NO]];
+ @endcode
+ */
+- (WXPayConfig *)configWithAppQrPayEnabled:(BOOL)enabled
+    NS_SWIFT_NAME(withAppQrPayEnabled(_:));
 
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;

@@ -10,22 +10,14 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  PaySDK 在 iOS 上公开支持的支付能力。
 
- 取值范围以 iOS OpenSDK 已有的支付能力为基线，再加 PaySDK 独有的 @c WXPayCapabilityPayScene。
- Android 有而这里没有的（企业红包）是因为 iOS 微信侧从来没有实现过那条协议，不是本 SDK 的取舍。
+ 只有 App 支付、联合支付、支付场景三条，与鸿蒙一致。离线付款码、二维码、非税、医保这些
+ OpenSDK 老能力不在 PaySDK 里，需要的继续用 OpenSDK。2–5 曾分给那四条，已经空出，不要复用。
  */
 typedef NS_ENUM(NSInteger, WXPayCapability) {
     /** App 支付。 */
     WXPayCapabilityAppPay = 0,
     /** 联合支付。 */
     WXPayCapabilityJointPay = 1,
-    /** 跳转微信离线付款码；微信回跳时返回 @c WXPayOfflineResult。 */
-    WXPayCapabilityOfflinePay = 2,
-    /** 二维码支付。 */
-    WXPayCapabilityQrCodePay = 3,
-    /** 非税支付。本质是打开商户给定 URL 的微信内 H5。 */
-    WXPayCapabilityNontaxPay = 4,
-    /** 医保支付。与非税同构，只差微信侧的一个类型号。 */
-    WXPayCapabilityPayInsurance = 5,
     /**
      打开微信支付独立进程里的一个页面。
 

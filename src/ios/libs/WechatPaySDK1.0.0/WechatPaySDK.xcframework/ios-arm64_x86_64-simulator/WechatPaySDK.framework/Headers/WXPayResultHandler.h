@@ -5,11 +5,7 @@
 
 #import <Foundation/Foundation.h>
 #import "WXPayAppPayResult.h"
-#import "WXPayInsuranceResult.h"
 #import "WXPayJointPayResult.h"
-#import "WXPayNontaxResult.h"
-#import "WXPayOfflineResult.h"
-#import "WXPayQrCodeResult.h"
 #import "WXPaySceneResult.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -47,10 +43,6 @@ NS_SWIFT_NAME(WechatPayResultHandler)
 /** 联合支付回包。 */
 - (void)onJointPayResult:(WXPayJointPayResult *)result;
 
-- (void)onOfflinePayResult:(WXPayOfflineResult *)result;
-- (void)onQrCodePayResult:(WXPayQrCodeResult *)result;
-- (void)onNontaxPayResult:(WXPayNontaxResult *)result;
-- (void)onInsurancePayResult:(WXPayInsuranceResult *)result;
 - (void)onScenePayResult:(WXPaySceneResult *)result;
 
 @end
