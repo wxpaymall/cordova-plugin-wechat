@@ -163,7 +163,8 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
             json.put("transaction", result.getTransaction());
             json.put("sceneType", result.getSceneType());
             json.put("extMsg", result.getExtMsg());
-            json.put("openId", result.getOpenId());
+            // PaySDK 正式版的 PaySceneResult 还没有 getOpenId()，发版前先回空串，字段与 iOS 同形。
+            json.put("openId", "");
         } catch (JSONException e) {
             Log.d(Wechat.TAG, "put json error: " + e.getMessage());
         }
