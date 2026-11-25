@@ -56,6 +56,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.Map;
 
 public class Wechat extends CordovaPlugin {
 
@@ -138,6 +139,9 @@ public class Wechat extends CordovaPlugin {
     public static final int MAX_THUMBNAIL_SIZE = 320;
 
     protected static CallbackContext currentCallbackContext;
+    // 支付场景按 transaction 单独登记，不占 currentCallbackContext：场景未回包时又发支付或 OBV，
+    // 晚到的回包不能交给它们。
+    private static final Map<String, CallbackContext> paySceneCallbacks = new HashMap<String, CallbackContext>();
     protected static IWXAPI wxAPI;
     protected static String appId;
     protected static CordovaPreferences wx_preferences;
@@ -598,14 +602,21 @@ public class Wechat extends CordovaPlugin {
             return true;
         }
 
-        String transaction = params.optString("transaction", "");
+        String sceneType = stringParam(params, "sceneType");
+        String query = stringParam(params, "query");
+        String extInfo = stringParam(params, "extInfo");
+        String transaction = stringParam(params, "transaction");
+        if (sceneType == null || query == null || extInfo == null || transaction == null) {
+            callbackContext.error("sceneType / query / extInfo / transaction 必须是字符串");
+            return true;
+        }
         if (transaction.isEmpty()) {
             transaction = buildTransaction("payscene");
         }
         PaySceneRequest req = PaySceneRequest.builder()
-                .sceneType(params.optString("sceneType", ""))
-                .query(params.optString("query", ""))
-                .extInfo(params.optString("extInfo", ""))
+                .sceneType(sceneType)
+                .query(query)
+                .extInfo(extInfo)
                 .transaction(transaction)
                 .build();
 
@@ -613,13 +624,27 @@ public class Wechat extends CordovaPlugin {
 
         if (sendResult.isSent()) {
             Log.i(TAG, "PayScene request has been sent, transaction=" + transaction);
-            sendNoResultPluginResult(callbackContext);
+            synchronized (paySceneCallbacks) {
+                paySceneCallbacks.put(transaction, callbackContext);
+            }
+            PluginResult pending = new PluginResult(PluginResult.Status.NO_RESULT);
+            pending.setKeepCallback(true);
+            callbackContext.sendPluginResult(pending);
         } else {
             Log.i(TAG, "PayScene request has been sent unsuccessfully: " + sendResult);
             callbackContext.error(describeSendFailure(sendResult) + "（code=" + sendResult.getCode() + "）");
         }
 
         return true;
+    }
+
+    /** 不给或 null 时为空串；给了非字符串返回 null。与 iOS 插件、鸿蒙商城同一规则，不把数字转成字符串。 */
+    static String stringParam(JSONObject params, String key) {
+        Object value = params.opt(key);
+        if (value == null || value == JSONObject.NULL) {
+            return "";
+        }
+        return value instanceof String ? (String) value : null;
     }
 
     /**
@@ -1057,6 +1082,27 @@ public class Wechat extends CordovaPlugin {
 
     public static CallbackContext getCurrentCallbackContext() {
         return currentCallbackContext;
+    }
+
+    /** 取出并移除支付场景回包对应的回调；认不出是哪一笔时返回 null。 */
+    public static CallbackContext takePaySceneCallback(String transaction) {
+        synchronized (paySceneCallbacks) {
+            return takePending(paySceneCallbacks, transaction);
+        }
+    }
+
+    /**
+     * 按 transaction 取；回包没带 transaction 且只挂着一笔时取这一笔（PaySDK 未承诺所有场景都回带）。
+     */
+    static <T> T takePending(Map<String, T> pending, String transaction) {
+        if (transaction != null && !transaction.isEmpty()) {
+            return pending.remove(transaction);
+        }
+        if (pending.size() == 1) {
+            String only = pending.keySet().iterator().next();
+            return pending.remove(only);
+        }
+        return null;
     }
 
     private void sendNoResultPluginResult(CallbackContext callbackContext) {

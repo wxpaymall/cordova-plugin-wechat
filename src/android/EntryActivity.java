@@ -148,7 +148,7 @@ public class EntryActivity extends Activity implements IWXAPIEventHandler {
         Log.d(Wechat.TAG, "onPaySceneResult - errCode:" + result.getErrCode()
                 + ", errStr:" + result.getErrMessage());
 
-        CallbackContext ctx = Wechat.getCurrentCallbackContext();
+        CallbackContext ctx = Wechat.takePaySceneCallback(result.getTransaction());
 
         if (ctx == null) {
             startMainActivity();
