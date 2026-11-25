@@ -11,6 +11,20 @@
 
 static int const MAX_THUMBNAIL_SIZE = 320;
 
+// JS 传来的值可能是数字、null 或对象，直接赋给 NSString 属性会在 PaySDK 里抛 unrecognized selector。
+// 数字转成字符串（同 Android 插件的 optString），其他非字符串按空串处理。
+static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
+{
+    id value = [params objectForKey:key];
+    if ([value isKindOfClass:[NSString class]]) {
+        return value;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [value stringValue];
+    }
+    return @"";
+}
+
 @implementation CDVWechat
 
 #pragma mark "API"
@@ -193,15 +207,15 @@ static int const MAX_THUMBNAIL_SIZE = 320;
         return ;
     }
 
-    NSString *transaction = [params objectForKey:@"transaction"];
-    if (![transaction isKindOfClass:[NSString class]] || transaction.length == 0) {
+    NSString *transaction = CDVWechatStringParam(params, @"transaction");
+    if (transaction.length == 0) {
         transaction = [NSString stringWithFormat:@"payscene%.0f", [[NSDate date] timeIntervalSince1970] * 1000];
     }
 
     WXPaySceneRequest *req = [[WXPaySceneRequest alloc] init];
-    req.sceneType = [params objectForKey:@"sceneType"];
-    req.query = [params objectForKey:@"query"];
-    req.extInfo = [params objectForKey:@"extInfo"];
+    req.sceneType = CDVWechatStringParam(params, @"sceneType");
+    req.query = CDVWechatStringParam(params, @"query");
+    req.extInfo = CDVWechatStringParam(params, @"extInfo");
     req.transaction = transaction;
 
     [WXPayKit send:req completion:^(WXPaySendResult *result) {
