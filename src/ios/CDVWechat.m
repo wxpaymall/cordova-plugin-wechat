@@ -22,18 +22,40 @@ static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
     return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
-// 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），挂起太久的在下次发起时作废。
+// 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），每笔挂起满 30 分钟作废。
+// 作废的 transaction 进程内不再受理：微信晚到的回包只带 transaction，复用就可能交给后一笔。
 static NSTimeInterval const CDVWechatPaySceneTimeout = 30 * 60;
 static NSString *const CDVWechatPendingCallbackKey = @"callbackId";
 static NSString *const CDVWechatPendingSinceKey = @"since";
+static NSString *const CDVWechatPaySceneExpiredMessage = @"支付场景超过 30 分钟未回包，已作废";
 
-// 该 transaction 已在等回包时不登记，返回 NO。
-static BOOL CDVWechatRegisterPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSString *transaction, NSString *callbackId, NSTimeInterval now)
+typedef NS_ENUM(NSInteger, CDVWechatPendingRegistration) {
+    CDVWechatPendingRegistered,
+    CDVWechatPendingBusy,
+    CDVWechatPendingRetired,
+};
+
+// 该 transaction 已在等回包或已作废时不登记。
+static CDVWechatPendingRegistration CDVWechatRegisterPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSString *transaction, NSString *callbackId, NSTimeInterval now)
 {
     if (pending[transaction] != nil) {
-        return NO;
+        return CDVWechatPendingBusy;
+    }
+    if ([retired containsObject:transaction]) {
+        return CDVWechatPendingRetired;
     }
     pending[transaction] = @{CDVWechatPendingCallbackKey: callbackId, CDVWechatPendingSinceKey: @(now)};
+    return CDVWechatPendingRegistered;
+}
+
+// 这一笔仍在等回包时作废它；已回包、已作废或 transaction 已换成别的一笔时返回 NO。
+static BOOL CDVWechatRetireIfPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSString *transaction, NSString *callbackId)
+{
+    if (![pending[transaction][CDVWechatPendingCallbackKey] isEqualToString:callbackId]) {
+        return NO;
+    }
+    [pending removeObjectForKey:transaction];
+    [retired addObject:transaction];
     return YES;
 }
 
@@ -48,14 +70,15 @@ static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NS
     return callbackId;
 }
 
-// 移除挂起满 timeout 的请求，返回它们的回调。
-static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSTimeInterval now, NSTimeInterval timeout)
+// 作废挂起满 timeout 的请求，返回它们的回调。
+static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSTimeInterval now, NSTimeInterval timeout)
 {
     NSMutableArray<NSString *> *expired = [NSMutableArray array];
     for (NSString *transaction in pending.allKeys) {
         NSDictionary *entry = pending[transaction];
         if (now - [entry[CDVWechatPendingSinceKey] doubleValue] >= timeout) {
             [expired addObject:entry[CDVWechatPendingCallbackKey]];
+            [retired addObject:transaction];
             [pending removeObjectForKey:transaction];
         }
     }
@@ -66,6 +89,7 @@ static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString 
 // 支付场景按 transaction 单独登记，不占 currentCallbackId：场景未回包时又发支付或 OBV，
 // 晚到的回包不能交给它们。
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *paySceneCallbackIds;
+@property (nonatomic, strong) NSMutableSet<NSString *> *retiredPaySceneTransactions;
 @end
 
 @implementation CDVWechat
@@ -268,26 +292,44 @@ static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString 
     req.extInfo = extInfo;
     req.transaction = transaction;
 
-    // 先登记再发送：同一 transaction 已在等回包时拒绝，避免后一笔顶掉前一笔的回调
+    // 先登记再发送：同一 transaction 已在等回包或已作废时拒绝，避免回包交给别的一笔
     if (self.paySceneCallbackIds == nil) {
         self.paySceneCallbackIds = [NSMutableDictionary dictionary];
     }
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    for (NSString *staleCallbackId in CDVWechatExpirePending(self.paySceneCallbackIds, now, CDVWechatPaySceneTimeout)) {
-        [self failWithCallbackID:staleCallbackId withMessage:@"支付场景超过 30 分钟未回包，已作废"];
+    if (self.retiredPaySceneTransactions == nil) {
+        self.retiredPaySceneTransactions = [NSMutableSet set];
     }
-    if (!CDVWechatRegisterPending(self.paySceneCallbackIds, transaction, command.callbackId, now)) {
-        [self failWithCallbackID:command.callbackId
-                     withMessage:[NSString stringWithFormat:@"transaction=%@ 已有一笔支付场景在等回包", transaction]];
-        return ;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    for (NSString *staleCallbackId in CDVWechatExpirePending(self.paySceneCallbackIds, self.retiredPaySceneTransactions, now, CDVWechatPaySceneTimeout)) {
+        [self failWithCallbackID:staleCallbackId withMessage:CDVWechatPaySceneExpiredMessage];
+    }
+    NSString *callbackId = command.callbackId;
+    switch (CDVWechatRegisterPending(self.paySceneCallbackIds, self.retiredPaySceneTransactions, transaction, callbackId, now)) {
+        case CDVWechatPendingRegistered:
+            break;
+        case CDVWechatPendingBusy:
+            [self failWithCallbackID:callbackId
+                         withMessage:[NSString stringWithFormat:@"transaction=%@ 已有一笔支付场景在等回包", transaction]];
+            return ;
+        case CDVWechatPendingRetired:
+            [self failWithCallbackID:callbackId
+                         withMessage:[NSString stringWithFormat:@"transaction=%@ 曾超过 30 分钟未回包已作废，重启 App 前不能再用", transaction]];
+            return ;
     }
 
     [WXPayKit send:req completion:^(WXPaySendResult *result) {
         if (result.isSent) {
             NSLog(@"cordova-plugin-wechat PayScene request has been sent, transaction=%@", transaction);
+            __weak CDVWechat *weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(CDVWechatPaySceneTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                CDVWechat *strongSelf = weakSelf;
+                if (strongSelf != nil && CDVWechatRetireIfPending(strongSelf.paySceneCallbackIds, strongSelf.retiredPaySceneTransactions, transaction, callbackId)) {
+                    [strongSelf failWithCallbackID:callbackId withMessage:CDVWechatPaySceneExpiredMessage];
+                }
+            });
         } else {
             [self.paySceneCallbackIds removeObjectForKey:transaction];
-            [self failWithCallbackID:command.callbackId
+            [self failWithCallbackID:callbackId
                          withMessage:[NSString stringWithFormat:@"%@（code=%ld）", result.message, (long)result.code]];
         }
     }];
