@@ -11,19 +11,38 @@
 
 static int const MAX_THUMBNAIL_SIZE = 320;
 
-// JS 传来的值可能是数字、null 或对象，直接赋给 NSString 属性会在 PaySDK 里抛 unrecognized selector。
-// 数字转成字符串（同 Android 插件的 optString），其他非字符串按空串处理。
+// JS 传来的值可能是数字或对象，直接赋给 NSString 属性会在 PaySDK 里抛 unrecognized selector。
+// 不给或 null 时为空串；给了非字符串返回 nil，调用方按参数错误处理（与 Android 插件、鸿蒙商城同一规则）。
 static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
 {
     id value = [params objectForKey:key];
-    if ([value isKindOfClass:[NSString class]]) {
-        return value;
+    if (value == nil || value == [NSNull null]) {
+        return @"";
     }
-    if ([value isKindOfClass:[NSNumber class]]) {
-        return [value stringValue];
-    }
-    return @"";
+    return [value isKindOfClass:[NSString class]] ? value : nil;
 }
+
+// 按 transaction 取出并移除挂起的回调；回包没带 transaction 且只挂着一笔时取这一笔
+// （PaySDK 未承诺所有场景都回带）。认不出是哪一笔时返回 nil。
+static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NSString *> *pending, NSString *transaction)
+{
+    NSString *key = transaction;
+    if (key.length == 0) {
+        if (pending.count != 1) {
+            return nil;
+        }
+        key = pending.allKeys.firstObject;
+    }
+    NSString *callbackId = pending[key];
+    [pending removeObjectForKey:key];
+    return callbackId;
+}
+
+@interface CDVWechat ()
+// 支付场景按 transaction 单独登记，不占 currentCallbackId：场景未回包时又发支付或 OBV，
+// 晚到的回包不能交给它们。
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *paySceneCallbackIds;
+@end
 
 @implementation CDVWechat
 
@@ -207,21 +226,31 @@ static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
         return ;
     }
 
+    NSString *sceneType = CDVWechatStringParam(params, @"sceneType");
+    NSString *query = CDVWechatStringParam(params, @"query");
+    NSString *extInfo = CDVWechatStringParam(params, @"extInfo");
     NSString *transaction = CDVWechatStringParam(params, @"transaction");
+    if (sceneType == nil || query == nil || extInfo == nil || transaction == nil) {
+        [self failWithCallbackID:command.callbackId withMessage:@"sceneType / query / extInfo / transaction 必须是字符串"];
+        return ;
+    }
     if (transaction.length == 0) {
         transaction = [NSString stringWithFormat:@"payscene%.0f", [[NSDate date] timeIntervalSince1970] * 1000];
     }
 
     WXPaySceneRequest *req = [[WXPaySceneRequest alloc] init];
-    req.sceneType = CDVWechatStringParam(params, @"sceneType");
-    req.query = CDVWechatStringParam(params, @"query");
-    req.extInfo = CDVWechatStringParam(params, @"extInfo");
+    req.sceneType = sceneType;
+    req.query = query;
+    req.extInfo = extInfo;
     req.transaction = transaction;
 
     [WXPayKit send:req completion:^(WXPaySendResult *result) {
         if (result.isSent) {
             NSLog(@"cordova-plugin-wechat PayScene request has been sent, transaction=%@", transaction);
-            self.currentCallbackId = command.callbackId;
+            if (self.paySceneCallbackIds == nil) {
+                self.paySceneCallbackIds = [NSMutableDictionary dictionary];
+            }
+            self.paySceneCallbackIds[transaction] = command.callbackId;
         } else {
             [self failWithCallbackID:command.callbackId
                          withMessage:[NSString stringWithFormat:@"%@（code=%ld）", result.message, (long)result.code]];
@@ -490,9 +519,9 @@ static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
 
 - (void)onScenePayResult:(WXPaySceneResult *)result
 {
-    NSString *callbackId = self.currentCallbackId;
+    NSString *callbackId = CDVWechatTakePendingCallback(self.paySceneCallbackIds, result.transaction);
     if (callbackId == nil) {
-        NSLog(@"cordova-plugin-wechat dropped PayScene result without an active callback");
+        NSLog(@"cordova-plugin-wechat dropped PayScene result without a matching callback, transaction=%@", result.transaction);
         return;
     }
 
@@ -506,7 +535,6 @@ static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
     };
     CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:response];
     [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
-    self.currentCallbackId = nil;
 }
 
 #pragma mark "CDVPlugin Overrides"
