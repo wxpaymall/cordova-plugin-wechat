@@ -22,26 +22,50 @@ static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
     return [value isKindOfClass:[NSString class]] ? value : nil;
 }
 
-// 按 transaction 取出并移除挂起的回调；回包没带 transaction 且只挂着一笔时取这一笔
-// （PaySDK 未承诺所有场景都回带）。认不出是哪一笔时返回 nil。
-static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NSString *> *pending, NSString *transaction)
+// 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），挂起太久的在下次发起时作废。
+static NSTimeInterval const CDVWechatPaySceneTimeout = 30 * 60;
+static NSString *const CDVWechatPendingCallbackKey = @"callbackId";
+static NSString *const CDVWechatPendingSinceKey = @"since";
+
+// 该 transaction 已在等回包时不登记，返回 NO。
+static BOOL CDVWechatRegisterPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSString *transaction, NSString *callbackId, NSTimeInterval now)
 {
-    NSString *key = transaction;
-    if (key.length == 0) {
-        if (pending.count != 1) {
-            return nil;
-        }
-        key = pending.allKeys.firstObject;
+    if (pending[transaction] != nil) {
+        return NO;
     }
-    NSString *callbackId = pending[key];
-    [pending removeObjectForKey:key];
+    pending[transaction] = @{CDVWechatPendingCallbackKey: callbackId, CDVWechatPendingSinceKey: @(now)};
+    return YES;
+}
+
+// 回包必须带 transaction 才能认领，不按挂起笔数猜归属。
+static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSString *transaction)
+{
+    if (transaction.length == 0) {
+        return nil;
+    }
+    NSString *callbackId = pending[transaction][CDVWechatPendingCallbackKey];
+    [pending removeObjectForKey:transaction];
     return callbackId;
+}
+
+// 移除挂起满 timeout 的请求，返回它们的回调。
+static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSTimeInterval now, NSTimeInterval timeout)
+{
+    NSMutableArray<NSString *> *expired = [NSMutableArray array];
+    for (NSString *transaction in pending.allKeys) {
+        NSDictionary *entry = pending[transaction];
+        if (now - [entry[CDVWechatPendingSinceKey] doubleValue] >= timeout) {
+            [expired addObject:entry[CDVWechatPendingCallbackKey]];
+            [pending removeObjectForKey:transaction];
+        }
+    }
+    return expired;
 }
 
 @interface CDVWechat ()
 // 支付场景按 transaction 单独登记，不占 currentCallbackId：场景未回包时又发支付或 OBV，
 // 晚到的回包不能交给它们。
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *paySceneCallbackIds;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *paySceneCallbackIds;
 @end
 
 @implementation CDVWechat
@@ -244,14 +268,25 @@ static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NS
     req.extInfo = extInfo;
     req.transaction = transaction;
 
+    // 先登记再发送：同一 transaction 已在等回包时拒绝，避免后一笔顶掉前一笔的回调
+    if (self.paySceneCallbackIds == nil) {
+        self.paySceneCallbackIds = [NSMutableDictionary dictionary];
+    }
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    for (NSString *staleCallbackId in CDVWechatExpirePending(self.paySceneCallbackIds, now, CDVWechatPaySceneTimeout)) {
+        [self failWithCallbackID:staleCallbackId withMessage:@"支付场景超过 30 分钟未回包，已作废"];
+    }
+    if (!CDVWechatRegisterPending(self.paySceneCallbackIds, transaction, command.callbackId, now)) {
+        [self failWithCallbackID:command.callbackId
+                     withMessage:[NSString stringWithFormat:@"transaction=%@ 已有一笔支付场景在等回包", transaction]];
+        return ;
+    }
+
     [WXPayKit send:req completion:^(WXPaySendResult *result) {
         if (result.isSent) {
             NSLog(@"cordova-plugin-wechat PayScene request has been sent, transaction=%@", transaction);
-            if (self.paySceneCallbackIds == nil) {
-                self.paySceneCallbackIds = [NSMutableDictionary dictionary];
-            }
-            self.paySceneCallbackIds[transaction] = command.callbackId;
         } else {
+            [self.paySceneCallbackIds removeObjectForKey:transaction];
             [self failWithCallbackID:command.callbackId
                          withMessage:[NSString stringWithFormat:@"%@（code=%ld）", result.message, (long)result.code]];
         }

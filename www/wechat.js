@@ -115,7 +115,8 @@ module.exports = {
      * onSuccess 收到微信回包 {errCode, errStr, transaction, sceneType, extMsg, openId}，取消与失败也走这里；
      * onError 只表示请求没送进微信。iOS 微信不回 openId，恒为空串。
      * sceneType、query、extInfo、transaction 只收字符串（可不给），给了别的类型直接 onError。
-     * transaction 不给时由插件生成；多笔同时挂起时按 transaction 对应回包。
+     * transaction 不给时由插件生成；回包按 transaction 对应到发起的那一笔。同一 transaction 还在等回包时再发会直接 onError；
+     * 挂起超过 30 分钟的请求在下次发起时以 onError 作废（微信未必回包，如 iOS 微信收到新请求会取消在途的支付场景）。
      *
      * @example
      * <code>
