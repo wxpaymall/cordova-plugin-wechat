@@ -110,10 +110,10 @@ module.exports = {
     },
 
     /**
-     * 经 PaySDK 打开支付场景入口（仅 Android）
+     * 经 PaySDK 打开支付场景入口（command 1001）
      *
-     * onSuccess 收到微信回包 {errCode, errStr, transaction, sceneType, extMsg}，取消与失败也走这里；
-     * onError 只表示请求没送进微信。
+     * onSuccess 收到微信回包 {errCode, errStr, transaction, sceneType, extMsg, openId}，取消与失败也走这里；
+     * onError 只表示请求没送进微信。iOS 微信不回 openId，恒为空串。
      *
      * @example
      * <code>
