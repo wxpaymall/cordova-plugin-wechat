@@ -55,7 +55,10 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 public class Wechat extends CordovaPlugin {
@@ -141,7 +144,10 @@ public class Wechat extends CordovaPlugin {
     protected static CallbackContext currentCallbackContext;
     // 支付场景按 transaction 单独登记，不占 currentCallbackContext：场景未回包时又发支付或 OBV，
     // 晚到的回包不能交给它们。
-    private static final Map<String, CallbackContext> paySceneCallbacks = new HashMap<String, CallbackContext>();
+    private static final Map<String, PendingPayScene<CallbackContext>> paySceneCallbacks =
+            new HashMap<String, PendingPayScene<CallbackContext>>();
+    // 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），挂起太久的在下次发起时作废。
+    static final long PAY_SCENE_PENDING_TIMEOUT_MS = 30 * 60 * 1000L;
     protected static IWXAPI wxAPI;
     protected static String appId;
     protected static CordovaPreferences wx_preferences;
@@ -620,18 +626,33 @@ public class Wechat extends CordovaPlugin {
                 .transaction(transaction)
                 .build();
 
+        // 先登记再发送：同一 transaction 已在等回包时拒绝，避免后一笔顶掉前一笔的回调
+        List<CallbackContext> expired;
+        boolean registered;
+        synchronized (paySceneCallbacks) {
+            expired = expirePending(paySceneCallbacks, System.currentTimeMillis(), PAY_SCENE_PENDING_TIMEOUT_MS);
+            registered = registerPending(paySceneCallbacks, transaction, callbackContext, System.currentTimeMillis());
+        }
+        for (CallbackContext stale : expired) {
+            stale.error("支付场景超过 30 分钟未回包，已作废");
+        }
+        if (!registered) {
+            callbackContext.error("transaction=" + transaction + " 已有一笔支付场景在等回包");
+            return true;
+        }
+
         SendResult sendResult = WechatPay.send(req);
 
         if (sendResult.isSent()) {
             Log.i(TAG, "PayScene request has been sent, transaction=" + transaction);
-            synchronized (paySceneCallbacks) {
-                paySceneCallbacks.put(transaction, callbackContext);
-            }
             PluginResult pending = new PluginResult(PluginResult.Status.NO_RESULT);
             pending.setKeepCallback(true);
             callbackContext.sendPluginResult(pending);
         } else {
             Log.i(TAG, "PayScene request has been sent unsuccessfully: " + sendResult);
+            synchronized (paySceneCallbacks) {
+                paySceneCallbacks.remove(transaction);
+            }
             callbackContext.error(describeSendFailure(sendResult) + "（code=" + sendResult.getCode() + "）");
         }
 
@@ -1084,25 +1105,53 @@ public class Wechat extends CordovaPlugin {
         return currentCallbackContext;
     }
 
-    /** 取出并移除支付场景回包对应的回调；认不出是哪一笔时返回 null。 */
+    /** 取出并移除支付场景回包对应的回调；回包没带 transaction 或认不出是哪一笔时返回 null。 */
     public static CallbackContext takePaySceneCallback(String transaction) {
         synchronized (paySceneCallbacks) {
             return takePending(paySceneCallbacks, transaction);
         }
     }
 
-    /**
-     * 按 transaction 取；回包没带 transaction 且只挂着一笔时取这一笔（PaySDK 未承诺所有场景都回带）。
-     */
-    static <T> T takePending(Map<String, T> pending, String transaction) {
-        if (transaction != null && !transaction.isEmpty()) {
-            return pending.remove(transaction);
+    static final class PendingPayScene<T> {
+        final T callback;
+        final long sinceMs;
+
+        PendingPayScene(T callback, long sinceMs) {
+            this.callback = callback;
+            this.sinceMs = sinceMs;
         }
-        if (pending.size() == 1) {
-            String only = pending.keySet().iterator().next();
-            return pending.remove(only);
+    }
+
+    /** 该 transaction 已在等回包时不登记，返回 false。 */
+    static <T> boolean registerPending(Map<String, PendingPayScene<T>> pending, String transaction, T callback, long nowMs) {
+        if (pending.containsKey(transaction)) {
+            return false;
         }
-        return null;
+        pending.put(transaction, new PendingPayScene<T>(callback, nowMs));
+        return true;
+    }
+
+    /** 回包必须带 transaction 才能认领，不按挂起笔数猜归属。 */
+    static <T> T takePending(Map<String, PendingPayScene<T>> pending, String transaction) {
+        if (transaction == null || transaction.isEmpty()) {
+            return null;
+        }
+        PendingPayScene<T> entry = pending.remove(transaction);
+        return entry == null ? null : entry.callback;
+    }
+
+    /** 移除挂起满 timeoutMs 的请求，返回它们的回调。 */
+    static <T> List<T> expirePending(Map<String, PendingPayScene<T>> pending, long nowMs, long timeoutMs) {
+        List<T> expired = new ArrayList<T>();
+        Iterator<PendingPayScene<T>> it = pending.values().iterator();
+        while (it.hasNext()) {
+            PendingPayScene<T> entry = it.next();
+            if (nowMs - entry.sinceMs >= timeoutMs) {
+                expired.add(entry.callback);
+                it.remove();
+            }
+        }
+        return expired;
     }
 
     private void sendNoResultPluginResult(CallbackContext callbackContext) {
