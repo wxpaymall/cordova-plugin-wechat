@@ -9,6 +9,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
 import android.webkit.URLUtil;
@@ -57,9 +60,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class Wechat extends CordovaPlugin {
 
@@ -146,8 +151,15 @@ public class Wechat extends CordovaPlugin {
     // 晚到的回包不能交给它们。
     private static final Map<String, PendingPayScene<CallbackContext>> paySceneCallbacks =
             new HashMap<String, PendingPayScene<CallbackContext>>();
-    // 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），挂起太久的在下次发起时作废。
+    // 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），每笔挂起满 30 分钟作废。
+    // 作废的 transaction 进程内不再受理：微信晚到的回包只带 transaction，复用就可能交给后一笔。
+    private static final Set<String> retiredPaySceneTransactions = new HashSet<String>();
+    private static final Handler paySceneTimeoutHandler = new Handler(Looper.getMainLooper());
     static final long PAY_SCENE_PENDING_TIMEOUT_MS = 30 * 60 * 1000L;
+    static final int PAY_SCENE_REGISTERED = 0;
+    static final int PAY_SCENE_BUSY = 1;
+    static final int PAY_SCENE_RETIRED = 2;
+    static final String PAY_SCENE_EXPIRED_MESSAGE = "支付场景超过 30 分钟未回包，已作废";
     protected static IWXAPI wxAPI;
     protected static String appId;
     protected static CordovaPreferences wx_preferences;
@@ -626,18 +638,23 @@ public class Wechat extends CordovaPlugin {
                 .transaction(transaction)
                 .build();
 
-        // 先登记再发送：同一 transaction 已在等回包时拒绝，避免后一笔顶掉前一笔的回调
+        // 先登记再发送：同一 transaction 已在等回包或已作废时拒绝，避免回包交给别的一笔
         List<CallbackContext> expired;
-        boolean registered;
+        int registered;
         synchronized (paySceneCallbacks) {
-            expired = expirePending(paySceneCallbacks, System.currentTimeMillis(), PAY_SCENE_PENDING_TIMEOUT_MS);
-            registered = registerPending(paySceneCallbacks, transaction, callbackContext, System.currentTimeMillis());
+            long now = SystemClock.elapsedRealtime();
+            expired = expirePending(paySceneCallbacks, retiredPaySceneTransactions, now, PAY_SCENE_PENDING_TIMEOUT_MS);
+            registered = registerPending(paySceneCallbacks, retiredPaySceneTransactions, transaction, callbackContext, now);
         }
         for (CallbackContext stale : expired) {
-            stale.error("支付场景超过 30 分钟未回包，已作废");
+            stale.error(PAY_SCENE_EXPIRED_MESSAGE);
         }
-        if (!registered) {
+        if (registered == PAY_SCENE_BUSY) {
             callbackContext.error("transaction=" + transaction + " 已有一笔支付场景在等回包");
+            return true;
+        }
+        if (registered == PAY_SCENE_RETIRED) {
+            callbackContext.error("transaction=" + transaction + " 曾超过 30 分钟未回包已作废，重启 App 前不能再用");
             return true;
         }
 
@@ -648,6 +665,19 @@ public class Wechat extends CordovaPlugin {
             PluginResult pending = new PluginResult(PluginResult.Status.NO_RESULT);
             pending.setKeepCallback(true);
             callbackContext.sendPluginResult(pending);
+            final String sentTransaction = transaction;
+            paySceneTimeoutHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    boolean retired;
+                    synchronized (paySceneCallbacks) {
+                        retired = retireIfPending(paySceneCallbacks, retiredPaySceneTransactions, sentTransaction, callbackContext);
+                    }
+                    if (retired) {
+                        callbackContext.error(PAY_SCENE_EXPIRED_MESSAGE);
+                    }
+                }
+            }, PAY_SCENE_PENDING_TIMEOUT_MS);
         } else {
             Log.i(TAG, "PayScene request has been sent unsuccessfully: " + sendResult);
             synchronized (paySceneCallbacks) {
@@ -1122,12 +1152,26 @@ public class Wechat extends CordovaPlugin {
         }
     }
 
-    /** 该 transaction 已在等回包时不登记，返回 false。 */
-    static <T> boolean registerPending(Map<String, PendingPayScene<T>> pending, String transaction, T callback, long nowMs) {
+    /** 该 transaction 已在等回包或已作废时不登记，返回 PAY_SCENE_BUSY / PAY_SCENE_RETIRED。 */
+    static <T> int registerPending(Map<String, PendingPayScene<T>> pending, Set<String> retired, String transaction, T callback, long nowMs) {
         if (pending.containsKey(transaction)) {
-            return false;
+            return PAY_SCENE_BUSY;
+        }
+        if (retired.contains(transaction)) {
+            return PAY_SCENE_RETIRED;
         }
         pending.put(transaction, new PendingPayScene<T>(callback, nowMs));
+        return PAY_SCENE_REGISTERED;
+    }
+
+    /** 这一笔仍在等回包时作废它；已回包、已作废或 transaction 已换成别的一笔时返回 false。 */
+    static <T> boolean retireIfPending(Map<String, PendingPayScene<T>> pending, Set<String> retired, String transaction, T callback) {
+        PendingPayScene<T> entry = pending.get(transaction);
+        if (entry == null || entry.callback != callback) {
+            return false;
+        }
+        pending.remove(transaction);
+        retired.add(transaction);
         return true;
     }
 
@@ -1140,14 +1184,15 @@ public class Wechat extends CordovaPlugin {
         return entry == null ? null : entry.callback;
     }
 
-    /** 移除挂起满 timeoutMs 的请求，返回它们的回调。 */
-    static <T> List<T> expirePending(Map<String, PendingPayScene<T>> pending, long nowMs, long timeoutMs) {
+    /** 作废挂起满 timeoutMs 的请求，返回它们的回调。 */
+    static <T> List<T> expirePending(Map<String, PendingPayScene<T>> pending, Set<String> retired, long nowMs, long timeoutMs) {
         List<T> expired = new ArrayList<T>();
-        Iterator<PendingPayScene<T>> it = pending.values().iterator();
+        Iterator<Map.Entry<String, PendingPayScene<T>>> it = pending.entrySet().iterator();
         while (it.hasNext()) {
-            PendingPayScene<T> entry = it.next();
-            if (nowMs - entry.sinceMs >= timeoutMs) {
-                expired.add(entry.callback);
+            Map.Entry<String, PendingPayScene<T>> entry = it.next();
+            if (nowMs - entry.getValue().sinceMs >= timeoutMs) {
+                expired.add(entry.getValue().callback);
+                retired.add(entry.getKey());
                 it.remove();
             }
         }
