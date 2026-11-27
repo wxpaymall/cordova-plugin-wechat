@@ -110,6 +110,33 @@ module.exports = {
     },
 
     /**
+     * 经 PaySDK 打开支付场景入口（command 1001）
+     *
+     * onSuccess 收到微信回包 {errCode, errStr, transaction, sceneType, extMsg, openId}，取消与失败也走这里；
+     * onError 表示没有走到微信回包：参数不合法、请求没送进微信、transaction 不可用或挂起超时。openId 目前恒为空串（iOS 微信不回；Android 待 PaySDK 正式版提供）。
+     * sceneType、query、extInfo、transaction 只收字符串（可不给），给了别的类型直接 onError。
+     * transaction 不给时由插件生成；回包按 transaction 对应到发起的那一笔。同一 transaction 还在等回包时再发会直接 onError。
+     * 每笔挂起满 30 分钟以 onError 作废（微信未必回包，如 iOS 微信收到新请求会取消在途的支付场景）；
+     * 作废过的 transaction 在 App 重启前再发会直接 onError，微信之后晚到的回包也不再投递。
+     *
+     * @example
+     * <code>
+     * Wechat.sendPaySceneRequest({
+     *     sceneType: 'ps_xxxxxxxxxxxx', // 运营系统分配的入口号
+     *     query: 'a=1',
+     *     extInfo: '{"k":"v"}'
+     * }, function (resp) {
+     *     alert(JSON.stringify(resp));
+     * }, function (reason) {
+     *     alert("Failed: " + reason);
+     * });
+     * </code>
+     */
+    sendPaySceneRequest: function (params, onSuccess, onError) {
+        exec(onSuccess, onError, "Wechat", "sendPaySceneRequest", [params]);
+    },
+
+    /**
      * 委托代扣App签约
      *
      * @link https://pay.weixin.qq.com/wiki/doc/api/wxpay_v2/papay/chapter3_2.shtml
