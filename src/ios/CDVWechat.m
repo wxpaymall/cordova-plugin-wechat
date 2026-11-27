@@ -7,8 +7,90 @@
 //
 
 #import "CDVWechat.h"
+#import "CDVWechatPayCoordinator.h"
 
 static int const MAX_THUMBNAIL_SIZE = 320;
+
+// JS 传来的值可能是数字或对象，直接赋给 NSString 属性会在 PaySDK 里抛 unrecognized selector。
+// 不给或 null 时为空串；给了非字符串返回 nil，调用方按参数错误处理（与 Android 插件、鸿蒙商城同一规则）。
+static NSString *CDVWechatStringParam(NSDictionary *params, NSString *key)
+{
+    id value = [params objectForKey:key];
+    if (value == nil || value == [NSNull null]) {
+        return @"";
+    }
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+// 微信未必回包（如 iOS 微信收到新请求会取消在途的支付场景），每笔挂起满 30 分钟作废。
+// 作废的 transaction 进程内不再受理：微信晚到的回包只带 transaction，复用就可能交给后一笔。
+static NSTimeInterval const CDVWechatPaySceneTimeout = 30 * 60;
+static NSString *const CDVWechatPendingCallbackKey = @"callbackId";
+static NSString *const CDVWechatPendingSinceKey = @"since";
+static NSString *const CDVWechatPaySceneExpiredMessage = @"支付场景超过 30 分钟未回包，已作废";
+
+typedef NS_ENUM(NSInteger, CDVWechatPendingRegistration) {
+    CDVWechatPendingRegistered,
+    CDVWechatPendingBusy,
+    CDVWechatPendingRetired,
+};
+
+// 该 transaction 已在等回包或已作废时不登记。
+static CDVWechatPendingRegistration CDVWechatRegisterPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSString *transaction, NSString *callbackId, NSTimeInterval now)
+{
+    if (pending[transaction] != nil) {
+        return CDVWechatPendingBusy;
+    }
+    if ([retired containsObject:transaction]) {
+        return CDVWechatPendingRetired;
+    }
+    pending[transaction] = @{CDVWechatPendingCallbackKey: callbackId, CDVWechatPendingSinceKey: @(now)};
+    return CDVWechatPendingRegistered;
+}
+
+// 这一笔仍在等回包时作废它；已回包、已作废或 transaction 已换成别的一笔时返回 NO。
+static BOOL CDVWechatRetireIfPending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSString *transaction, NSString *callbackId)
+{
+    if (![pending[transaction][CDVWechatPendingCallbackKey] isEqualToString:callbackId]) {
+        return NO;
+    }
+    [pending removeObjectForKey:transaction];
+    [retired addObject:transaction];
+    return YES;
+}
+
+// 回包必须带 transaction 才能认领，不按挂起笔数猜归属。
+static NSString *CDVWechatTakePendingCallback(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSString *transaction)
+{
+    if (transaction.length == 0) {
+        return nil;
+    }
+    NSString *callbackId = pending[transaction][CDVWechatPendingCallbackKey];
+    [pending removeObjectForKey:transaction];
+    return callbackId;
+}
+
+// 作废挂起满 timeout 的请求，返回它们的回调。
+static NSArray<NSString *> *CDVWechatExpirePending(NSMutableDictionary<NSString *, NSDictionary *> *pending, NSMutableSet<NSString *> *retired, NSTimeInterval now, NSTimeInterval timeout)
+{
+    NSMutableArray<NSString *> *expired = [NSMutableArray array];
+    for (NSString *transaction in pending.allKeys) {
+        NSDictionary *entry = pending[transaction];
+        if (now - [entry[CDVWechatPendingSinceKey] doubleValue] >= timeout) {
+            [expired addObject:entry[CDVWechatPendingCallbackKey]];
+            [retired addObject:transaction];
+            [pending removeObjectForKey:transaction];
+        }
+    }
+    return expired;
+}
+
+@interface CDVWechat ()
+// 支付场景按 transaction 单独登记，不占 currentCallbackId：场景未回包时又发支付或 OBV，
+// 晚到的回包不能交给它们。
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *paySceneCallbackIds;
+@property (nonatomic, strong) NSMutableSet<NSString *> *retiredPaySceneTransactions;
+@end
 
 @implementation CDVWechat
 
@@ -17,10 +99,12 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     NSString* appId = [[self.commandDelegate settings] objectForKey:@"wechatappid"];
     
     NSString* universalLink = [[self.commandDelegate settings] objectForKey:@"universallink"];
-    
+
     if (appId && ![appId isEqualToString:self.wechatAppId]) {
         self.wechatAppId = appId;
         [WXApi registerApp: appId universalLink: universalLink];
+        WXPayConfig *config = [[WXPayConfig alloc] initWithAppId:appId universalLink:universalLink];
+        [WXPayKit initWithConfig:config];
         
         NSLog(@"cordova-plugin-wechat has been initialized. Wechat SDK Version: %@. APP_ID: %@. universalLink: %@", [WXApi getApiVersion], appId, universalLink);
     }
@@ -158,13 +242,7 @@ static int const MAX_THUMBNAIL_SIZE = 320;
         }
     }
 
-    PayReq *req = [[PayReq alloc] init];
-
-    // NSString *appId = [params objectForKey:requiredParams[5]];
-    // if (appId && ![appId isEqualToString:self.wechatAppId]) {
-    //     self.wechatAppId = appId;
-    //     [WXApi registerApp: appId];
-    // }
+    WXPayAppPayRequest *req = [[WXPayAppPayRequest alloc] init];
 
     req.partnerId = [params objectForKey:requiredParams[0]];
     req.prepayId = [params objectForKey:requiredParams[1]];
@@ -177,12 +255,83 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     }
     req.sign = [params objectForKey:requiredParams[4]];
     
-    [WXApi sendReq:(BaseReq *)req completion:^(BOOL success) {
-       if (success) {
-           self.currentCallbackId = command.callbackId;
-       } else {
-           [self failWithCallbackID:command.callbackId withMessage:@"发送请求失败"];
-       }
+    [WXPayKit send:req completion:^(WXPaySendResult *result) {
+        if (result.isSent) {
+            // 与原 OpenSDK 插件一致：发送成功后记录最新一笔 callback，不额外拒绝后续请求。
+            self.currentCallbackId = command.callbackId;
+        } else {
+            [self failWithCallbackID:command.callbackId withMessage:result.message];
+        }
+    }];
+}
+
+- (void)sendPaySceneRequest:(CDVInvokedUrlCommand *)command
+{
+    NSDictionary *params = [command.arguments objectAtIndex:0];
+    if (![params isKindOfClass:[NSDictionary class]])
+    {
+        [self failWithCallbackID:command.callbackId withMessage:@"参数格式错误"];
+        return ;
+    }
+
+    NSString *sceneType = CDVWechatStringParam(params, @"sceneType");
+    NSString *query = CDVWechatStringParam(params, @"query");
+    NSString *extInfo = CDVWechatStringParam(params, @"extInfo");
+    NSString *transaction = CDVWechatStringParam(params, @"transaction");
+    if (sceneType == nil || query == nil || extInfo == nil || transaction == nil) {
+        [self failWithCallbackID:command.callbackId withMessage:@"sceneType / query / extInfo / transaction 必须是字符串"];
+        return ;
+    }
+    if (transaction.length == 0) {
+        transaction = [NSString stringWithFormat:@"payscene%.0f", [[NSDate date] timeIntervalSince1970] * 1000];
+    }
+
+    WXPaySceneRequest *req = [[WXPaySceneRequest alloc] init];
+    req.sceneType = sceneType;
+    req.query = query;
+    req.extInfo = extInfo;
+    req.transaction = transaction;
+
+    // 先登记再发送：同一 transaction 已在等回包或已作废时拒绝，避免回包交给别的一笔
+    if (self.paySceneCallbackIds == nil) {
+        self.paySceneCallbackIds = [NSMutableDictionary dictionary];
+    }
+    if (self.retiredPaySceneTransactions == nil) {
+        self.retiredPaySceneTransactions = [NSMutableSet set];
+    }
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    for (NSString *staleCallbackId in CDVWechatExpirePending(self.paySceneCallbackIds, self.retiredPaySceneTransactions, now, CDVWechatPaySceneTimeout)) {
+        [self failWithCallbackID:staleCallbackId withMessage:CDVWechatPaySceneExpiredMessage];
+    }
+    NSString *callbackId = command.callbackId;
+    switch (CDVWechatRegisterPending(self.paySceneCallbackIds, self.retiredPaySceneTransactions, transaction, callbackId, now)) {
+        case CDVWechatPendingRegistered:
+            break;
+        case CDVWechatPendingBusy:
+            [self failWithCallbackID:callbackId
+                         withMessage:[NSString stringWithFormat:@"transaction=%@ 已有一笔支付场景在等回包", transaction]];
+            return ;
+        case CDVWechatPendingRetired:
+            [self failWithCallbackID:callbackId
+                         withMessage:[NSString stringWithFormat:@"transaction=%@ 曾超过 30 分钟未回包已作废，重启 App 前不能再用", transaction]];
+            return ;
+    }
+
+    [WXPayKit send:req completion:^(WXPaySendResult *result) {
+        if (result.isSent) {
+            NSLog(@"cordova-plugin-wechat PayScene request has been sent, transaction=%@", transaction);
+            __weak CDVWechat *weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(CDVWechatPaySceneTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                CDVWechat *strongSelf = weakSelf;
+                if (strongSelf != nil && CDVWechatRetireIfPending(strongSelf.paySceneCallbackIds, strongSelf.retiredPaySceneTransactions, transaction, callbackId)) {
+                    [strongSelf failWithCallbackID:callbackId withMessage:CDVWechatPaySceneExpiredMessage];
+                }
+            });
+        } else {
+            [self.paySceneCallbackIds removeObjectForKey:transaction];
+            [self failWithCallbackID:callbackId
+                         withMessage:[NSString stringWithFormat:@"%@（code=%ld）", result.message, (long)result.code]];
+        }
     }];
 }
 
@@ -420,6 +569,51 @@ static int const MAX_THUMBNAIL_SIZE = 320;
     self.currentCallbackId = nil;
 }
 
+#pragma mark "WXPayResultHandler"
+
+- (void)onAppPayResult:(WXPayAppPayResult *)result
+{
+    NSString *callbackId = self.currentCallbackId;
+    if (callbackId == nil) {
+        // 冷启动或进程重建后没有可证明归属的 Cordova callback：丢弃客户端结果，
+        // 不缓存到下一笔支付，业务必须依赖服务端订单状态查单。
+        NSLog(@"cordova-plugin-wechat dropped AppPay result without an active payment callback");
+        return;
+    }
+
+    NSDictionary *response =
+        [CDVWechatPayCoordinator payloadWithErrCode:result.errCode
+                                            errStr:result.errMessage
+                                  fromAppQrPay:result.fromAppQrPay];
+
+    CDVCommandStatus status = result.isSuccess ? CDVCommandStatus_OK : CDVCommandStatus_ERROR;
+    CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:status messageAsDictionary:response];
+    [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
+
+    // 客户端回包仅用于驱动界面或查单，不能作为支付成功落账证据。
+    self.currentCallbackId = nil;
+}
+
+- (void)onScenePayResult:(WXPaySceneResult *)result
+{
+    NSString *callbackId = CDVWechatTakePendingCallback(self.paySceneCallbackIds, result.transaction);
+    if (callbackId == nil) {
+        NSLog(@"cordova-plugin-wechat dropped PayScene result without a matching callback, transaction=%@", result.transaction);
+        return;
+    }
+
+    NSDictionary *response = @{
+        @"errCode": @(result.errCode),
+        @"errStr": result.errMessage ?: @"",
+        @"transaction": result.transaction ?: @"",
+        @"sceneType": result.sceneType ?: @"",
+        @"extMsg": result.extMessage ?: @"",
+        @"openId": result.openId ?: @"",
+    };
+    CDVPluginResult *commandResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:response];
+    [self.commandDelegate sendPluginResult:commandResult callbackId:callbackId];
+}
+
 #pragma mark "CDVPlugin Overrides"
 
 - (void)handleOpenURL:(NSNotification *)notification
@@ -428,7 +622,11 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 
     if ([url isKindOfClass:[NSURL class]] && [url.scheme isEqualToString:self.wechatAppId])
     {
-        [WXApi handleOpenURL:url delegate:self];
+        [CDVWechatPayCoordinator routePaySDK:^BOOL{
+            return [WXPayKit handleOpenURL:url handler:self];
+        } openSDK:^BOOL{
+            return [WXApi handleOpenURL:url delegate:self];
+        }];
     }
 }
 
@@ -655,11 +853,19 @@ static int const MAX_THUMBNAIL_SIZE = 320;
 }
 
 - (BOOL)handleUserActivity:(NSUserActivity *)userActivity {
-   return [WXApi handleOpenUniversalLink:userActivity delegate:self];
+    return [CDVWechatPayCoordinator routePaySDK:^BOOL{
+        return [WXPayKit handleUniversalLink:userActivity handler:self];
+    } openSDK:^BOOL{
+        return [WXApi handleOpenUniversalLink:userActivity delegate:self];
+    }];
 }
 
 - (BOOL)handleWechatOpenURL:(NSURL *)url  {
-    return [WXApi handleOpenURL:url delegate:self];
+    return [CDVWechatPayCoordinator routePaySDK:^BOOL{
+        return [WXPayKit handleOpenURL:url handler:self];
+    } openSDK:^BOOL{
+        return [WXApi handleOpenURL:url delegate:self];
+    }];
 }
 
 @end
